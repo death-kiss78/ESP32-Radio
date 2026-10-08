@@ -1,0 +1,72 @@
+site_name: ESP32-Radio
+site_description: ESP32 Radio (yoRadio fork)
+site_url: https://death-kiss78.github.io/ESP32-Radio/
+repo_url: https://github.com/death-kiss78/ESP32-Radio
+repo_name: death-kiss78/ESP32-Radio
+
+theme:
+  name: material
+  favicon: images/icon.png
+  features:
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - search.highlight
+    - search.share
+    - content.code.copy
+    - content.tabs.link
+    - toc.follow
+  palette:
+    # Light mode
+    - scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    # Dark mode
+    - scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+
+markdown_extensions:
+  - pymdownx.magiclink:
+      repo_url_shorthand: true
+      user: trip5
+      repo: ehRadio
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+  - admonition
+  - pymdownx.details
+  - pymdownx.tabbed:
+      alternate_style: true
+  - attr_list
+  - md_in_html
+  - toc:
+      permalink: true
+      toc_depth: 3
+
+nav:
+  - Readme: index.md
+  - Hardware: Hardware.md
+  - Audio/Power Isolation: Isolation.md
+  - Controls: Controls.md
+  - Commands: Commands.md
+  - ёRadio Images: Images.md
+
+plugins:
+  - search
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/death-kiss78
