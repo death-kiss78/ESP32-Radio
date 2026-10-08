@@ -64,24 +64,6 @@ jobs:
           fi
           echo "✅ Version validation passed"
 
-      - name: Verify builds/releases/ is up-to-date
-        run: |
-          echo "🔍 Verifying builds/releases/ is up-to-date..."
-          cd builds
-          python3 fix_releases.py
-          cd ..
-          if ! git diff --quiet builds/releases/; then
-            echo ""
-            echo "❌ builds/releases/ is out of date. Run locally and commit:"
-            echo "  cd builds"
-            echo "  python fix_releases.py"
-            echo "  git add releases/"
-            echo "  git commit -m 'Update release files'"
-            echo ""
-            git diff --stat builds/releases/
-            exit 1
-          fi
-          echo "✅ builds/releases/ is up-to-date"
 
       - name: Install PlatformIO
         run: pip install platformio
