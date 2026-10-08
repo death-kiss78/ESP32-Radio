@@ -1,0 +1,177 @@
+name: Build and Deploy GitHub Page
+
+on:
+  workflow_run:
+    workflows: ["Build and Release Firmware", "Update Builds in Release"]
+    types:
+      - completed
+  push:
+    branches: [ 'main' ]
+  workflow_dispatch:
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.x'
+
+      - name: Install dependencies
+        run: pip install mkdocs-material==9.7.7
+
+      - name: Stage docs from README
+        run: |
+          mkdir -p docs
+          cp README.md docs/index.md
+          for f in *.md; do
+            [ "$f" != "README.md" ] && cp "$f" docs/
+          done
+          cp -r images docs/
+
+      - name: Update GitHub link in documentation index
+        run: |
+          # Replace only the first occurrence of 'Github Page' with 'Github Repository'
+          sed -i '0,/Github Page/s|Github Page|Github Repository|' docs/index.md
+          # Replace only the first occurrence of the link after that phrase with the correct repo link
+          sed -i "0,/(https:\/\/[^)]*)/s|(https://[^)]*)|(https://github.com/${{ github.repository }})|" docs/index.md
+          # Replace only the first occurrence of 'easier to read' with 'easier to explore'
+          sed -i '0,/easier to read/s|easier to read|easier to explore|' docs/index.md
+
+      - name: Fix MkDocs cross-references
+        run: |
+          for f in docs/*.md; do
+            sed -i 's|](README.md|](index.md|g' "$f"
+            sed -i 's|](docs/|](|g' "$f"
+          done
+
+      - name: Copy web assets (manifests and firmware-info.json)
+        run: |
+          LOCAL_ASSETS="builds/${{ github.repository_owner }}/web_assets"
+          if [ ! -d "$LOCAL_ASSETS" ]; then
+            LOCAL_ASSETS="builds/releases/web_assets"
+          fi
+          LOCAL_JSON="$LOCAL_ASSETS/firmware-info.json"
+          PUBLISHED_JSON=$(mktemp)
+          PRESERVE_PUBLISHED=false
+          if curl -fsSL "https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/firmware-info.json" -o "$PUBLISHED_JSON" 2>/dev/null; then
+            if [ -f "$LOCAL_JSON" ] && ! diff -q "$LOCAL_JSON" "$PUBLISHED_JSON" > /dev/null 2>&1; then
+              echo "✅ firmware-info.json changed: treating as release, copying local web assets"
+              cp -r "$LOCAL_ASSETS/"* docs/
+            else
+              echo "ℹ️ firmware-info.json unchanged (or no local): preserving published assets"
+              cp "$PUBLISHED_JSON" docs/firmware-info.json
+              PRESERVE_PUBLISHED=true
+            fi
+          elif [ -d "$LOCAL_ASSETS" ]; then
+            echo "✅ Published firmware-info.json not found: copying local web assets"
+            cp -r "$LOCAL_ASSETS/"* docs/
+          else
+            echo "⚠️ No web assets found for ${{ github.repository_owner }}"
+            echo "Run the Build and Release Firmware workflow to generate them."
+          fi
+          if [ "$PRESERVE_PUBLISHED" = true ]; then
+            mkdir -p docs/manifests
+            python3 - <<'PY'
+          import json, os, urllib.request
+          base = "https://${{ github.repository_owner }}.github.io/${{ github.event.repository.name }}/"
+          with open("docs/firmware-info.json", encoding="utf-8") as file:
+              for variant in json.load(file).get("variants", []):
+                  path = variant["manifest"]
+                  os.makedirs(os.path.dirname(f"docs/{path}"), exist_ok=True)
+                  urllib.request.urlretrieve(base + path, f"docs/{path}")
+          PY
+          fi
+
+      - name: Convert relative repo links to GitHub URLs
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          BASE="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/blob/${DEFAULT_BRANCH}"
+          RAW="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${DEFAULT_BRANCH}"
+          #
+          # 1. Asset targets (images, media, archives) go to RAW urls, and must be done
+          #    first: a blob url is an HTML page, so it renders as a broken image in
+          #    ![alt](image.png) or ![alt](./dir/pic.png), whereas a raw url is the
+          #    image bytes themselves.  The rewritten urls contain a colon, so the
+          #    repo-file rewrite below leaves them alone.
+          #    NOTE: '%' is the s delimiter here, not '|', because the pattern below
+          #    uses '|' for alternation.  A leading './' is dropped so the raw url is
+          #    repo-root relative.
+          sed -i -E "s%]\((\./)?([^)#:/][^)#:]*\.(png|jpe?g|gif|webp|avif|svg|ico|bmp|mp4|webm|pdf|zip|apk))\)%](${RAW}/\2)%gI" docs/index.md
+          #
+          # 2. Any other repo-relative target becomes a blob url.  MkDocs only resolves
+          #    links between documentation pages, so repo files such as
+          #    [LICENSE](LICENSE) would 404 on the site.  A target without a colon is
+          #    repo-relative; anything containing ':' (https:, mailto:), starting with
+          #    a '#' anchor or starting with '/' (site-absolute) is left untouched.
+          #    Nothing is hardcoded, so forks rewrite against their own repo + branch.
+          sed -i -E "s|]\(([^)#/][^):]*)\)|](${BASE}/\1)|g" docs/index.md
+          echo "Asset links rewritten against ${RAW}/"
+          echo "Repo file links rewritten against ${BASE}/"
+
+      - name: Customize firmware.html
+        if: github.repository_owner != 'death-kiss78'
+        run: |
+          if [ -f "docs/firmware.html" ]; then
+            sed -i "s|const GITHUB_OWNER = '.*'|const GITHUB_OWNER = '${{ github.repository_owner }}'|g" docs/firmware.html
+            sed -i "s|const REPO_NAME = '.*'|const REPO_NAME = '${{ github.event.repository.name }}'|g" docs/firmware.html
+            sed -i "s|github.com/trip5/ehRadio/releases|github.com/${{ github.repository }}/releases|g" docs/firmware.html
+            sed -i "s|<!-- <p>Forked by XYZ from</p> -->|<p>Forked by ${{ github.repository_owner }} from</p>|g" docs/firmware.html
+            echo "✅ Customized firmware.html for ${{ github.repository_owner }}"
+          fi
+
+      - name: Download latest release firmware (.bin files)
+        run: |
+          mkdir -p docs/firmware
+          gh release download --repo ${{ github.repository }} --pattern '*.bin' --dir docs/firmware || echo "⚠️ No release binaries found to download."
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Debug - Show docs structure before build
+        run: |
+          echo "📂 Docs folder structure:"
+          find docs -type f | sort
+          echo ""
+          echo "📊 File counts:"
+          echo "  Manifests: $(find docs/manifests -name '*.json' 2>/dev/null | wc -l)"
+          echo "  Firmware binaries: $(find docs/firmware -name '*.bin' 2>/dev/null | wc -l)"
+          echo "  HTML files: $(find docs -name '*.html' | wc -l)"
+
+      - name: Build documentation
+        run: mkdocs build --strict
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v6
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: ./site
+
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    needs: build-deploy
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5

@@ -1,0 +1,275 @@
+name: Build and Release Firmware
+
+on:
+  push:
+    tags:
+      - '*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (e.g., 2026.03.22)'
+        required: false
+        type: string
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check for required files
+        run: |
+          MISSING_FILES=""
+          if [ ! -f "builds/releases/firmware.txt" ]; then
+            MISSING_FILES="${MISSING_FILES}  builds/releases/firmware.txt\n"
+          fi
+          if [ ! -f "builds/releases/releases.md" ]; then
+            MISSING_FILES="${MISSING_FILES}  builds/releases/releases.md\n"
+          fi
+          if [ ! -f "builds/releases/web_assets/firmware-info.json" ]; then
+            MISSING_FILES="${MISSING_FILES}  builds/releases/web_assets/firmware-info.json\n"
+          fi
+          if [ -n "$MISSING_FILES" ]; then
+            echo "❌ Missing required files:"
+            echo -e "$MISSING_FILES"
+            echo "Run from the builds/ directory:"
+            echo "  python fix_releases.py"
+            echo "  git add releases/"
+            echo "  git commit -m 'Update release files'"
+            exit 1
+          fi
+
+          FOUND=0
+          for subfolder in builds/*/; do
+            name=$(basename "$subfolder")
+            [ "$name" = "releases" ] && continue
+            if [ -f "$subfolder/platformio.ini" ] && [ -f "$subfolder/myoptions.h" ]; then
+              echo "✅ Found contributor: $name"
+              FOUND=1
+            fi
+          done
+          if [ "$FOUND" = "0" ]; then
+            echo "❌ No contributor subfolder found with platformio.ini + myoptions.h"
+            exit 1
+          fi
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Verify builds/releases/ is up-to-date
+        run: |
+          echo "🔍 Verifying builds/releases/ is up-to-date..."
+          cd builds
+          python3 fix_releases.py
+          cd ..
+          if ! git diff --quiet builds/releases/; then
+            echo ""
+            echo "❌ builds/releases/ is out of date. Diff:"
+            git diff builds/releases/
+            echo ""
+            echo "Run locally and commit:"
+            echo "  cd builds"
+            echo "  python fix_releases.py"
+            echo "  git add releases/"
+            echo "  git commit -m 'Update release files'"
+            exit 1
+          fi
+          echo "✅ builds/releases/ is up-to-date"
+
+      - name: Load release body text
+        id: release_body
+        run: |
+          echo "body<<EOF" >> $GITHUB_OUTPUT
+          cat "builds/releases/releases.md" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Prepare Gzipped Web Assets for Release
+        run: |
+          mkdir -p www_release
+          for file in data/www/*; do
+            filename=$(basename "$file")
+            if [[ "$filename" == *.gz ]]; then
+              echo "Copying $filename (already gzipped)."
+              cp "$file" "www_release/"
+            elif [[ "$filename" == "rb_srvrs.json" ]]; then
+              cp "$file" "www_release/"
+              echo "Adding $filename without compression."
+            else
+              echo "Compressing $filename."
+              gzip -c -9 "$file" > "www_release/$filename.gz"
+            fi
+          done
+
+      - name: Package Upload_Files.zip
+        run: |
+          echo "📦 Creating Upload_Files.zip..."
+          mkdir -p upload_pkg/www upload_pkg/data
+          cp www_release/* upload_pkg/www/
+          cp builds/releases/playlist.csv builds/releases/wifi.csv upload_pkg/data/
+          cd upload_pkg
+          zip -r ../Upload_Files.zip .
+          cd ..
+          echo "✅ Upload_Files.zip created"
+          unzip -l Upload_Files.zip
+
+      - name: Get version tag
+        id: get_version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            VERSION="${{ inputs.version }}"
+          else
+            VERSION=${GITHUB_REF#refs/tags/}
+          fi
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "tag=${VERSION}" >> $GITHUB_OUTPUT
+          echo "Final version: ${VERSION}"
+          echo "ehRadio Version $(grep -oP '#define RADIOVERSION "\K[^"]+' src/core/options.h)" > version.txt
+
+      - name: Validate version matches options.h
+        run: |
+          EXPECTED_VERSION="${{ steps.get_version.outputs.version }}"
+          ACTUAL_VERSION=$(grep -oP '#define RADIOVERSION "\K[^"]+' src/core/options.h)
+          echo "Expected: ${EXPECTED_VERSION}"
+          echo "Actual:   ${ACTUAL_VERSION}"
+          if [ "${EXPECTED_VERSION}" != "${ACTUAL_VERSION}" ]; then
+            echo "❌ Version mismatch! Update RADIOVERSION in src/core/options.h to \"${EXPECTED_VERSION}\""
+            exit 1
+          fi
+          echo "✅ Version validation passed"
+
+      - name: Install PlatformIO
+        run: pip install platformio
+
+      - name: Make binaries folder
+        run: mkdir -p binaries
+
+      - name: Build firmware for all contributors
+        run: |
+          # Track which board_envs have had bootloader/partitions extracted
+          declare -A board_done
+
+          for subfolder in builds/*/; do
+            folder_name=$(basename "$subfolder")
+            [ "$folder_name" = "releases" ] && continue
+            [ ! -f "$subfolder/platformio.ini" ] && continue
+            [ ! -f "$subfolder/myoptions.h" ] && continue
+
+            # Only build if at least one env in this platformio.ini matches a fw_env in firmware.txt.
+            # fw_env = folder_name + "_" + pio_env, so we check each [env:...] name from platformio.ini.
+            SHOULD_BUILD=0
+            while IFS= read -r pio_env; do
+              if grep -qF "|${folder_name}_${pio_env}|" builds/releases/firmware.txt; then
+                SHOULD_BUILD=1
+                break
+              fi
+            done < <(grep -oP '(?<=\[env:)[^\]]+' "$subfolder/platformio.ini")
+            if [ "$SHOULD_BUILD" = "0" ]; then
+              echo "⏭️  Skipping $folder_name/ (no environments match firmware.txt)"
+              continue
+            fi
+
+            echo "🔨 Building contributor: $folder_name"
+            cp "$subfolder/myoptions.h" myoptions.h
+            cp "$subfolder/platformio.ini" platformio.ini
+
+            pio run
+
+            for d in .pio/build/*/; do
+              pio_env=$(basename "$d")
+              fw_env="${folder_name}_${pio_env}"
+
+              # Skip envs not listed in firmware.txt for this contributor
+              if ! grep -qF "|${fw_env}|" builds/releases/firmware.txt; then
+                continue
+              fi
+
+              # Copy firmware binary
+              if [ -f "$d/firmware.bin" ]; then
+                cp "$d/firmware.bin" "binaries/${fw_env}.bin"
+                echo "  ✅ ${fw_env}.bin"
+              fi
+
+              # Extract bootloader/partitions for this board_env (first occurrence only)
+              board_env=$(awk -F'|' -v fw="${fw_env}" '$3 == fw {print $1; exit}' builds/releases/firmware.txt)
+              if [ -n "$board_env" ] && [ -z "${board_done[$board_env]+x}" ]; then
+                if [ -f "$d/bootloader.bin" ] && [ -f "$d/partitions.bin" ]; then
+                  cp "$d/bootloader.bin" "binaries/${board_env}_bootloader.bin"
+                  cp "$d/partitions.bin" "binaries/${board_env}_partitions.bin"
+                  echo "  ✅ ${board_env}: bootloader + partitions"
+                  board_done[$board_env]=1
+                fi
+              fi
+            done
+          done
+
+      - name: Organize firmware for ESP Web Tools
+        run: |
+          echo "📦 Organizing firmware for ESP Web Tools..."
+          mkdir -p firmware
+
+          # Copy bootloader/partitions flat (matches ../firmware/ paths in manifests)
+          while read -r board_env; do
+            if [ -f "binaries/${board_env}_bootloader.bin" ]; then
+              cp "binaries/${board_env}_bootloader.bin" "firmware/${board_env}_bootloader.bin"
+              cp "binaries/${board_env}_partitions.bin" "firmware/${board_env}_partitions.bin"
+              echo "✅ ${board_env}: bootloader + partitions"
+            else
+              echo "⚠️  Warning: bootloader not found for ${board_env}"
+            fi
+          done < <(awk -F'|' '{print $1}' builds/releases/firmware.txt | sort -u)
+
+          # Copy individual firmware binaries
+          while IFS='|' read -r board_env chip_family fw_env friendly_name; do
+            if [ -f "binaries/${fw_env}.bin" ]; then
+              cp "binaries/${fw_env}.bin" "firmware/${fw_env}.bin"
+              echo "✅ ${fw_env}.bin"
+            else
+              echo "⚠️  Warning: ${fw_env}.bin not found"
+            fi
+          done < builds/releases/firmware.txt
+
+          echo "📦 Firmware organization complete"
+
+      - name: Upload firmware artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware-binaries
+          path: |
+            binaries/*.bin
+            firmware/*.bin
+            www_release/*
+            builds/releases/web_assets/**
+            Upload_Files.zip
+          retention-days: 90
+
+      - name: Create ehRadio Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.get_version.outputs.tag }}
+          name: "${{ steps.get_version.outputs.tag }}"
+          body: ${{ steps.release_body.outputs.body }}
+          files: |
+            binaries/*.bin
+            www_release/*
+            Upload_Files.zip
+            version.txt
+          fail_on_unmatched_files: false
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Delete old releases and assets
+        uses: dev-drprasad/delete-older-releases@v0.3.3
+        with:
+          keep_latest: 10
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
