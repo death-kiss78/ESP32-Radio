@@ -23,6 +23,7 @@
 #include "utility.h"
 #include "../displays/dspcore.h"
 #include "../displays/themes.h"
+#include "../displays/themeregistry.h"
 #ifdef USE_SD
   #include "sdmanager.h"
 #endif
@@ -31,10 +32,13 @@
 const char* const Config::wwwFiles[] = {"options.js", "script.js", "script2.js",
                                         "logo.svg", "icon.png", "style.css", "theme.css", "rb_srvrs.json", "timezones.json",
                                         "curated.html", "irrecord.html", "options.html", "sdmanager.html", "search.html", "updform.html",
-                                        "player.html"}; // keep main page at end (deleted when upgraded, last to be downloaded, so user sees emptyfs_html with wait message)
+                                        "editor.html", "player.html"}; // keep main page at end (deleted when upgraded, last to be downloaded, so user sees emptyfs_html with wait message)
 const size_t Config::wwwFilesCount = sizeof(Config::wwwFiles) / sizeof(Config::wwwFiles[0]);
 
-const char* const Config::dataFiles[] = {PLAYLIST_FILE, SSIDS_FILE, VERSION_FILE};
+// The theme slots are optional files rather than required ones, so they are here purely to keep
+// pruneLittleFS() from deleting them: that function compares each /data file's basename against this
+// list, which is why THEME_SLOT_FILES holds bare names and not paths.
+const char* const Config::dataFiles[] = {PLAYLIST_FILE, SSIDS_FILE, VERSION_FILE, THEME_SLOT_FILES};
 const size_t Config::dataFilesCount = sizeof(Config::dataFiles) / sizeof(Config::dataFiles[0]);
 
 #if defined(SPI_BUS_SECONDARY)
@@ -421,9 +425,11 @@ void Config::_initHW() {
 }
 
 void Config::loadTheme() {
-  uint8_t count = sizeof(_themes) / sizeof(_themes[0]);
-  if (config.store.themeId >= count) config.store.themeId = 0;
-  memcpy_P(&theme, &_themes[config.store.themeId], sizeof(ThemeData));
+  // Through the registry rather than straight off the table: the id may name a user slot, and it may
+  // name a slot whose file has since been deleted.  themeValidId() answers both - it hands back the
+  // id when a theme is really there and 0 otherwise, so the persisted id cannot dangle.
+  config.store.themeId = themeValidId(config.store.themeId);
+  if (!themeCopy(config.store.themeId, &theme)) themeCopy(0, &theme);
 }
 
 void Config::defaultSettings(const char *val, uint8_t clientId) {
@@ -440,6 +446,7 @@ void Config::defaultSettings(const char *val, uint8_t clientId) {
   }
   if (strcmp(val, "screen") == 0) {
     saveValue(&store.flipscreen, (bool)SCREEN_FLIP);
+    display.flip();                 // a setRotation: the repaint the single request below queues shows it
     saveValue(&store.invertdisplay, (bool)SCREEN_INVERT);
     saveValue(&store.inverttitle, INVERT_TITLE);
     saveValue(&store.themeId, (uint8_t)0);
@@ -459,6 +466,7 @@ void Config::defaultSettings(const char *val, uint8_t clientId) {
     saveValue(&store.dimmingBrightness, (uint8_t)DIMMING_BRIGHTNESS);
     store.dspon = true;  // runtime state only: the display is always on at boot/reset, never restored from NVS
     store.brightness = (uint8_t)SCREEN_BRIGHTNESS; setBrightness(false);
+    backlightControls.restart();
     saveValue(&store.screensaverEnabled, (bool)SS_NOTPLAYING);
     saveValue(&store.screensaverBlank, (bool)SS_NOTPLAYING_BLANK);
     saveValue(&store.screensaverTimeout, (uint16_t)SS_NOTPLAYING_TIME);
@@ -466,11 +474,13 @@ void Config::defaultSettings(const char *val, uint8_t clientId) {
     saveValue(&store.screensaverPlayingBlank, (bool)SS_PLAYING_BLANK);
     saveValue(&store.screensaverPlayingTimeout, (uint16_t)SS_PLAYING_TIME);
     saveValue(&store.screensaverFullDateTime, (bool)SS_FULL_DATETIME);
-    backlightControls.restart();
-    display.flip();
-    display.applyTheme(0);
-    display.applyLayout(0);
-    display.putRequest(NEWMODE, CLEAR); display.putRequest(NEWMODE, PLAYER);
+    saveValue(&store.screensaverText, (bool)SS_TEXT);
+    saveValue(&store.screensaverVU, (bool)SS_VU);
+    saveValue(&store.screensaverVUStyle, (uint8_t)SS_VU_STYLE);
+    saveValue(&store.screensaverVUpeak, (bool)SS_VUPEAK);
+    // One screen update
+    display.applyFonts((uint8_t)DISPLAYFONT, (uint8_t)CLOCKFONT);
+    netserver.requestOnChange(GETACTIVE, 0);
     netserver.requestOnChange(GETSCREEN, clientId);
     return;
   }
@@ -507,7 +517,7 @@ void Config::defaultSettings(const char *val, uint8_t clientId) {
     saveValue(store.weatherapi, WEATHER_API);
     saveValue(&store.weatherelevation, (int16_t)0);
     //saveValue(store.weatherkey, ""); // don't reset API key
-    display.putRequest(NEWMODE, CLEAR); display.putRequest(NEWMODE, PLAYER);
+    display.putRequest(SHOWWEATHER);
     netserver.requestOnChange(GETWEATHER, clientId);
     return;
   }
@@ -517,7 +527,6 @@ void Config::defaultSettings(const char *val, uint8_t clientId) {
     saveValue(&store.ehdp, (bool)EHDP);
     saveValue(store.ehdpname, "");
     char tmp[MDNS_LENGTH]; snprintf(tmp, MDNS_LENGTH, "ehradio-%x", getChipId()); saveValue(store.mdnsname, tmp);
-    display.putRequest(NEWMODE, CLEAR); display.putRequest(NEWMODE, PLAYER);
     netserver.requestOnChange(GETSYSTEM, clientId);
     return;
   }
@@ -540,12 +549,12 @@ void Config::defaultSettings(const char *val, uint8_t clientId) {
   if (strcmp(val, "1") == 0 || strcmp(val, "") == 0) {
     setDefaults();
     defaultSettings("controls", clientId);
-    defaultSettings("screen", clientId);
     defaultSettings("locale", clientId);
     defaultSettings("weather", clientId);
     defaultSettings("system", clientId);
     defaultSettings("mqtt", clientId);
     defaultSettings("battery", clientId);
+    defaultSettings("screen", clientId); // at the end to make sure screen doesn't break...
     return;
   }
 }
@@ -1022,6 +1031,10 @@ const configKeyMap Config::keyMap[] = {
   CONFIG_KEY_ENTRY(screensaverPlayingBlank, "scrnsvrplbl"),
   CONFIG_KEY_ENTRY(screensaverPlayingTimeout, "scrnsvrplto"),
   CONFIG_KEY_ENTRY(screensaverFullDateTime, "scrnsvrfull"),
+  CONFIG_KEY_ENTRY(screensaverText, "scrnsvrtext"),
+  CONFIG_KEY_ENTRY(screensaverVU, "scrnsvrvu"),
+  CONFIG_KEY_ENTRY(screensaverVUStyle, "scrnsvrvustyle"),
+  CONFIG_KEY_ENTRY(screensaverVUpeak, "scrnsvrvupeak"),
   CONFIG_KEY_ENTRY(dimmingEnabled, "dimmingen"),
   CONFIG_KEY_ENTRY(dimmingTimeout, "dimmingto"),
   CONFIG_KEY_ENTRY(dimmingBrightness, "dimmingbr"),

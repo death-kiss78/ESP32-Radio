@@ -27,12 +27,15 @@ class Widget{
     }
     // _present = the active layout provides this widget, set only by hideByLayout()/showByLayout(). It outranks
     // _active, which Pager::setPage() re-activates on every mode change.
-    void setActive(bool act, bool clr=false) { if(act && !_present) return; _active = act; if(_active && !_locked) _draw(); if(clr && !_locked) _clear(); }
+    void setActive(bool act, bool clr=false) { if(act && !_present) return; if(act && !_active) _invalidate(); _active = act; if(_active && !_locked) _draw(); if(clr && !_locked) _clear(); }
     // Locking is always allowed; unlocking a widget the layout dropped is not. Once absent, nothing but
     // showByLayout() can make it draw again.
     void lock(bool lck=true) { if(!lck && !_present) return; _locked = lck; if(_locked) _reset(); if(_locked && _active) _clear();  }
     void unlock() { if(_present) _locked = false; }
     bool locked() { return _locked; }
+    // The other half of the pair hideWeatherIfChanged() sets: a page switch re-activates every widget without
+    // touching the lock, so the two can disagree and the hide has to be able to see that.
+    bool isActive() { return _active; }
     void setPresent(bool p) { _present = p; }
     bool present() { return _present; }
     void moveTo(MoveConfig mv){
@@ -64,6 +67,11 @@ class Widget{
     uint16_t _fgcolor, _bgcolor, _width;
     WidgetConfig _config;
     MoveConfig _backMove;
+    // Called when the widget is switched on, before anything is drawn.  A widget that draws incrementally -
+    // repainting and sending only what changed - believes something about what the panel already holds, and
+    // that belief dies when something else clears the screen: a page switch fills the panel with the
+    // background.  Empty for every widget that repaints its whole area, which is all of them but the VU.
+    virtual void _invalidate() {}
     virtual void _draw() {}
     virtual void _clear() {}
     virtual void _reset() {}
@@ -118,13 +126,20 @@ class FillWidget: public Widget {
     void _draw();
 };
 
+// The mark a looping scroll line prints between its tail and its head, spaces included: " * ", or the holiday icon
+// on the holiday dates.  It is also what the screensaver's info line joins its own parts with, so the character
+// lives in exactly one place.  See plans/holiday-icons.md.
+const char* scrollMark();
+
 class ScrollWidget: public TextWidget {
   public:
     ScrollWidget(){}
-    ScrollWidget(const char* separator, ScrollConfig conf, uint16_t fgcolor, uint16_t bgcolor);
+    // The mark this line joins its tail and its head with is no longer the caller's business: scrollMark() owns
+    // the character and the holiday swap in one place (see plans/holiday-icons.md).
+    ScrollWidget(ScrollConfig conf, uint16_t fgcolor, uint16_t bgcolor);
     ~ScrollWidget();
     using Widget::init;
-    void init(const char* separator, ScrollConfig conf, uint16_t fgcolor, uint16_t bgcolor);
+    void init(ScrollConfig conf, uint16_t fgcolor, uint16_t bgcolor);
     void loop();
     void setText(const char* txt) override;
     void setText(const char* txt, const char *format) override;
@@ -152,6 +167,9 @@ class ScrollWidget: public TextWidget {
     void _calcX();
     void _drawFrame();
     void _draw();
+    void _setMark(const char* mark);   // import a mark into _sep and re-measure it
+    void _refreshMark();               // re-ask while the line is live: a holiday can begin at midnight
+    void _spanPainted();               // a scrolling paint owns the whole span, not just its own box
     bool _checkIsScrollNeeded();
     bool _checkDelay(int m, uint32_t &tstamp);
     void _clear();
