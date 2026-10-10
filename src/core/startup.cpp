@@ -13,6 +13,7 @@
 #include "player.h"
 #include "utility.h"
 #include "../locale/dsplocale.h"
+#include "../displays/themeregistry.h"
 #ifdef USE_SD
   #include "filemanager.h" // the SD manager parks the startup services the way SD playback does
 #endif
@@ -256,6 +257,20 @@ void Startup::checkLittleFSandVer() {
     }
   }
 
+  // The custom theme slots are optional files, so they are read after the pruning above - which is
+  // what keeps them, and only because their names are in Config::dataFiles[].  config.loadTheme()
+  // already ran, back in config.init() before the filesystem was mounted, so it is re-run here:
+  // only now can a persisted custom id be told apart from a slot whose file is gone.
+  themeLoadSlots();
+  const uint8_t themeIdWanted = config.store.themeId;
+  config.loadTheme();
+  // When the slot WAS gone, the resolved id has to be persisted rather than merely used.  Left in NVS, a
+  // stale id comes back to life the moment anything refills that slot - and reflashing LittleFS takes
+  // every slot file with it - so the device would change theme on a later boot for no reason the user
+  // could see.  This is the only place that can do it correctly: loadTheme()'s earlier call cannot judge a
+  // custom id at all, so persisting from there would forget a perfectly good custom theme on every boot.
+  if (config.store.themeId != themeIdWanted) config.saveValue(&config.store.themeId, config.store.themeId);
+
   if (!config.wwwFilesExist) {
     utility.deleteMainwwwFile();
     #ifndef UPDATEURL
@@ -304,6 +319,14 @@ void Startup::getDefaultPlaylist() {
       updater.setMaxSize(1024);
       updater.setUserAgent(ESPFILEUPDATER_USERAGENT);
       ESPFileUpdater::UpdateStatus result = updater.checkAndUpdate("/data/playlist.csv", PLAYLIST_DEFAULT_URL, "", ESPFILEUPDATER_VERBOSE);
+      // The CSV alone is not a playlist: index.dat carries one offset per line and is the only place the
+      // station count comes from.  This is the one writer of the four that did not index what it wrote, and
+      // an unindexed CSV is a device that reports no stations until the next boot builds one - see
+      // plans/playlist-index-and-weather-hide.md.
+      if (LittleFS.exists("/data/playlist.csv")) {
+        BOOTLOG("Indexing fetched playlist");
+        utility.indexPlaylist();
+      }
     }
   #endif
 }

@@ -473,6 +473,22 @@ All modules in `src/core/` follow the **class + global instance** pattern:
 
 ## `src/core/config.cpp`
 - Persistent storage/defaults/hardware bootstrap center.
+- **The two asset keep-lists hold bare basenames, and they are why a new asset is a two-place edit.**
+  `Config::wwwFiles[]` is simultaneously the PSRAM cache manifest, the `/www` prune whitelist and the list
+  `verifyLittleFS()` requires *in full* — it is an exact set match, so a file added here must reach every
+  device or the check reports the filesystem incomplete and the repair path runs. `Config::dataFiles[]`
+  holds the optional `/data` files and only feeds `pruneLittleFS()`, so it may name a file that does not
+  exist; `THEME_SLOT_FILES` adds the ten `xtheme1..10.json` custom theme slots there purely so the next
+  cleanup does not delete them. Both lists are compared against a basename, never a path.
+- `Config::loadTheme()` resolves through the theme registry, not the compiled table, and deliberately
+  tolerates an unresolved id: it runs from `_initHW()` before LittleFS is mounted, so a custom id cannot be
+  judged yet — see `src/displays/themeregistry.*`. `Startup::checkLittleFSandVer()` calls it again once the
+  slot files have been read, **and persists the correction when the resolved id differs from the stored one**.
+  That write is what stops a stale id from coming back to life: with the slot files gone (a reflashed
+  filesystem) a persisted `themeId` pointing at an empty slot would silently re-apply itself the moment
+  anything refilled that slot, changing the device's theme on a later boot for no visible reason. It has to
+  happen there rather than inside `loadTheme()`, whose earlier call cannot judge a custom id at all and would
+  therefore forget a perfectly good custom theme on every boot.
 - Main responsibilities:
   - load and validate Preferences (`cfgset` marker)
   - defaults/init logic
@@ -805,15 +821,46 @@ budget (four back-to-back teardowns, measured). The handle must be cleared befor
 `WiFiLostConnection` must use `network.lostPlaying || player.isRunning()`, never an assignment: during a reset
 nothing is playing, so an assignment wrote `false` and the Wi-Fi returned to a silent radio.
 
+**The ladder has a floor and a ceiling, and the reset is reached from two places** through one helper,
+`forceLinkReset()`. The floor is a ladder that cannot be created at all: the create needs
+`NETWORK_TASK_STACK_BYTES` (8 KB on the S3 - `NETWORK_TASK_STACK_SIZE` 4 KB × `STACK_MULTIPLIER` 2) of
+contiguous heap, and the heap is lowest exactly when the stack is wedged, so the one rung that matters was
+unavailable when it was needed. A failed create used to be logged once (with the message swallowed, see the
+note in the guide) and forgotten, every 5 s forever, which is the incident that prompted this: the log showed
+`stream retry task is gone with a resume still owed` alternating with a bare `[ERROR] Network` for minutes
+while the heap sat at 7204-8424 bytes. Two failures in a row now escalate, and the reset needs no task, no heap
+and no scheduler. The ceiling is `STREAM_RESET_MAX` (3) resets and then **`ESP.restart()`**: a wedge that
+survives three resets, each followed by a successful Wi-Fi reconnect, cannot be cleared from software.
+
+**The reboot rung writes nothing to `bootStableMarker`.** The intentional-reboot paths set it true so the next
+boot is not safe mode; doing that here would mean a network wedge could never reach safe mode, and setting it
+false would mean one always could. Left alone it keeps its own meaning - a boot that never proved itself still
+lands in safe mode, and a device that has been up for hours still boots normally. The restart count is
+`RTC_DATA_ATTR` so it survives `esp_restart()` (which is the point) and a power cycle clears it;
+`RECOVERY_REBOOT_MAX` (2) consecutive restarts stops the escalation and returns to patient retries, because a
+device that wedges on every boot would otherwise reboot every ~100 s forever and safe mode would not catch it
+either: each boot *does* prove itself stable before the network fails. `RECOVERY_HEALTHY_MS` (10 min) of
+continuous playback clears the count so a later wedge gets the full escalation again.
+
+**The verdict is asked for on every failed attempt.** It used to be skipped when the connect returned in under
+`NET_REFUSAL_MS`: a fast failure was read as a refusal from the host, which does prove the path works - but a
+stack with an exhausted socket pool also fails fast, so the first two attempts of a wedge were waved through as
+"the host refused". The probe costs a gateway connect (~30 ms) or a bare-IP connect (≤700 ms), nothing beside
+an attempt, and only WEDGED is acted on: a station that is merely offline still gets the patient 15 s then 60 s
+tail forever, unchanged, because a reset would fix nothing there and costs a scan, a reassociation and DHCP.
+With the probe always asked, a stack that never answers is identified on the **first** attempt, so the reset
+lands about 8 s after the stream is lost instead of about 18 s.
+
 **One spawner, and a ladder that cannot lose its task.** Everything that starts `retryStreamConnection` - the
 arm gate in `player.loop()`, `WiFiReconnected`, and now the self-heal - goes through **`spawnStreamRetry()`**
 (`network.cpp`). The check-and-claim is a critical section, because two callers could otherwise win the race and
 leave a stray task running with the handle already cleared; more importantly the `xTaskCreatePinnedToCore` result
 is checked, because `player.loop()` sets `network.lostPlaying = true` **before** creating the task and nothing
 else clears that flag except a fresh Wi-Fi reconnect event - so a silent failure closed the arm gate until a
-reboot. `ticks()` (the 1 ms Ticker heartbeat) self-heals the same way: if `lostPlaying` is set, no task is
-servicing it, `!beginReconnect` and the link is up, it re-spawns, rate limited by `STREAM_RETRY_RESPAWN_MS`
-(options.h). The `wifiReconnectionTask` spawn is checked and logged too, but has no equivalent fallback: the AP is
+reboot. `ticks()` (the 1 s `Ticker` heartbeat, `ctimer.attach(1, ticks)`) self-heals the same way: if
+`lostPlaying` is set, no task is servicing it, `!beginReconnect` and the link is up, it re-spawns, rate limited
+by `STREAM_RETRY_RESPAWN_MS` (options.h), and escalates to a link reset once the re-spawns themselves keep
+failing. The `wifiReconnectionTask` spawn is checked and logged too, but has no equivalent fallback: the AP is
 otherwise only re-found on the next disconnect event.
 
 **Why the VS1053 build depended on this ladder more than the I2S build.** Both libraries retry a dead stream
@@ -911,6 +958,52 @@ thinks the radio forgot everything. The loader-side wait (`plans/network-recover
 
 ## `src/core/display.h` / `display.cpp`
 - `display.h` declares Display class and display mode/change API.
+- The screensaver's two extra widgets are `Display::_ssvu` and `Display::_sstext` - the only widgets no layout
+  provides. `_screensaverWidgets()` brings them up on **every** entry into `SCREENSAVER`, not once at boot,
+  because the meter's segmentation comes from the active layout's `bandsConf` and the info line's size from
+  the first conf that states one (`ssTextSize()`: `weatherConf`, then `title1Conf`, then `playlistConf`, then
+  `metaConf`), and the WebUI stays reachable while the device is asleep. While the meter is up the clock is
+  `lock()`ed (both `ClockWidget::draw()` and `_draw()` bail on `_locked`), and `_time()` skips its random walk on
+  the same recorded answer: its gate is `config.isScreensaver && !_ssMeterUp`, **not** the `screensaverVU` option,
+  so the clock walks whenever it is what the screensaver shows - VU-on with nothing playing included, which is the
+  case that shipped parked - and never while the meter owns the panel. `_ssContentH()` is the panel less the line's
+  strip - one text row plus 1% of the panel height, rounded
+  up, above and below it - and that figure is the floor the walking clock is clamped to. `_sstext` is created and
+  re-init'd like any other scroll line, so it carries the shared mark at its wrap, and `_screensaverLine()` joins the
+  line's own parts with that same helper - the two cannot differ, and the character lives in one file (see the
+  widgets.cpp note below). See `plans/screensaver-panel-ownership.md`.
+- **The screensaver owns the panel**: `_weatherHidden()` and `_clockHidden()` both answer for
+  `config.isScreensaver` before anything else, because the WebUI is reachable while the device is asleep and
+  both predicates are consulted from `_applyState()` (which runs its lock lines before its isScreensaver early
+  return) and from `_layoutChange()` via `SHOWVUMETER`. The weather widget belongs to the player page alone and
+  must never be drawn over the screensaver - `_screensaverLine()` is what carries it there. That method is
+  guarded on `_ssStripH()` first and on the lock second, because a *refused* strip is locked rather than inactive
+  and `ScrollWidget::setText()` paints on `_active` alone - so a new metadata string (`NEWTITLE` -> `_title()`) or
+  a weather refresh would otherwise paint the line the strip was refused for, leaving the content area sized as if
+  the strip were gone. The clock's answer while asleep is the recorded `Display::_ssMeterUp`, set by
+  `_screensaverWidgets()` on the one path that locks the clock for the meter, so the two cannot disagree; a
+  derived predicate was rejected because the canvas-allocation failure path - where the clock is what the
+  screensaver shows - is precisely the case a derived answer gets wrong.
+- **A user action wakes the panel, and the wake is explicit.** The screensaver is only ever left by a
+  `NEWMODE, PLAYER`, which is issued from two places: `Controls::screenSaverExit()` - which every panel handler
+  (encoder, buttons, IR) runs first, clearing the display queue, restarting the countdown and queueing the mode -
+  and `_play()`'s success branch ([`player.cpp`](../src/core/player.cpp:345)). The WebUI has no handler of its own,
+  so its transport commands (`toggle`, `prev`, `next`, `playstation`/`play`, `start`, `stop`, `burl`/`playurl`) now
+  call `Controls::screenSaverExit()` from `CommandHandler::exec` as well. That was the pause gap: pause is
+  `player.toggle()` with `_status == PLAYING` -> `PR_STOP` -> `_stop()`, which queues only `DBITRATE`/`PSTOP` and so
+  never reached a mode change, leaving the screensaver up with a dead meter (next/prev/play exit only because they
+  reach `_play()`). Volume and mute deliberately do **not** wake - a level change is not a transport action - and
+  the helper is a no-op once the mode is not a screensaver, so the panel paths that already ran it are unaffected.
+- **The screensaver's background is always black (0), never `config.theme.background`.** The clock, the info line
+  and the meter all erase to black while `isScreensaver`; only their *ink* colours come from the theme
+  (`config.theme.textss` for the caption, the four VU colours for the meter). The info line's background and the
+  meter's were the theme's for a while, which laid a coloured band behind the caption and a themed box behind the
+  bands; both now pass `0` - in `_screensaverWidgets()` and in `VuWidget::initScreensaver()`.
+- `SHOWWEATHER` and `NEWWEATHER` recompose the screensaver rather than the player page while
+  `config.isScreensaver`: `SHOWWEATHER` queues `SSREBUILD` only when the strip's existence changes with the
+  flag (otherwise it refreshes only the line, so a toggle costs no panel clear), and `NEWWEATHER` rebuilds when
+  there is no strip yet but `_ssStripH()` has become true - nothing playing and no weather cached at entry,
+  where only a rebuild can create the widget - and otherwise updates the line as before.
 - Render queue + display task + widget/page orchestration.
 - **Theme/layout/invert runtime switching** — major refactor:
   - `_applyState()` — central state function: loads layout from PROGMEM, loads theme from PROGMEM (TFT only), applies
@@ -1019,6 +1112,38 @@ thinks the radio forgot everything. The loader-side wait (`plans/network-recover
 
 ## `src/core/netserver.cpp`
 - HTTP + WebSocket + upload/update + search/curated orchestration.
+- **The theme editor's API sits at the end of `handleNotFound()`, behind `#if defined(DSP_TFT) || DBGWUI`.**
+  Eight routes serve `/editor.html` and nothing else links to them: `GET /theme-elements.json` (one object per
+  element — its key and its label — in table order), `GET /themeall.json` (every id, empty slots included, because the editor's source
+  dropdown must be able to offer one), `GET /themeactive.json` (the id in use, one number), `GET
+  /themedata.json?id=N`, `GET /xtheme.json?slot=N` (one slot as a download, offered to the browser as
+  `ehRadioTheme-<name>.json`), `GET /xthemeall.json` (every filled slot in one, in order, as
+  `ehRadioThemes-Backup.json`), `POST /xtheme` (`action=save|delete`) and `POST /themeapply`. The theme travels as ONE
+  `data=` field holding the same document the slot files use, so `themeParseTheme()` is the only parser and
+  there is no second shape to keep in step — and for the same reason **Save is also the import**: the export
+  writes what a save would have written, so feeding it back through Save restores the slot. `POST /xtheme`
+  also takes an optional **`use=0`**, which writes and installs the slot *without* selecting it; that is what
+  the page's bulk import uses, because ten sequential saves would otherwise leave the device sitting on the
+  last theme imported. The routes sit outside the WebUI's `group_*` conventions on purpose: the page is
+  unlisted and only it consumes them. The two exports exist because the slot files are the only copy of a
+  custom theme, and a LittleFS reflash takes all ten with it.
+- **`/themeall.json` sends an empty string for a slot that holds nothing, not a label.** The editor's two
+  dropdowns describe the same slot differently — the source has to say "this is a custom slot", the target
+  has to say "this is already taken" — so the decoration is the page's job and the firmware sends only the
+  name. An empty string is then the single, unambiguous "nothing here" the page reads, with no marker string
+  for the two sides to disagree about. (`/themes.json`, which the options page uses, instead omits empty
+  slots entirely — a different list for a different consumer.)
+- **`themeapply` previews and writes nothing; `xtheme action=save` commits and does everything.** The
+  preview parses into `themeStaging()` and queues `THEMEPREVIEW`, and the display task takes the staged
+  colours from there — no file, no NVS, no `themeId`. The page sends that request on a debounce as you
+  edit, which is the whole of the "live" behaviour and has no control of its own. Save is the editor's one
+  committing action: it writes the slot, then sets `themeId` to it, persists that and calls
+  `display.applyTheme()` — the ordinary theme path, the same one the WebUI dropdown uses — so the panel
+  shows it and options.html agrees about which theme is in use. It therefore resets the pre-sleep countdown
+  exactly as any theme change does. Delete is the other NVS write: when the slot being removed is the theme
+  in use, `themeId` falls back to 0 and is persisted, because a stored id with no theme behind it is the one
+  state that cannot be left behind. `GET /themes.json` picks up a save or delete by itself —
+  `Display::getThemeListJson()` rebuilds when the registry's generation has moved.
 - Main responsibilities:
   - static file serving from PSRAM cache (via `StaticFileCache`) — no LittleFS reads during HTTP serving
   - fallback to LittleFS for dynamic files not in cache (`searchresults.json`, `curated.json`, etc.)
@@ -1073,6 +1198,31 @@ thinks the radio forgot everything. The loader-side wait (`plans/network-recover
 
 ## `src/core/commandhandler.h` / `commandhandler.cpp`
 - `commandhandler.h` declares command execution API for command strings.
+- The three screensaver-composition commands (`screensavertext`, `screensavervu`, `screensavervustyle`) are the
+  only members of the screensaver family that also ask for `GETACTIVE` again, because they change which rows
+  the Screen section shows. `GETACTIVE` sends `group_vu_ss` unconditionally inside the VU `#if` (the VU
+  Screensaver checkbox, which needs no VU box in the layout), `group_vu_ss_style` only while `screensaverVU`
+  is on (the style picker *and* the meter's own peaks/axis switch, which share the group because both belong
+  to the screensaver's meter), and withdraws `group_full_time` while it is on; `group_vu` keeps its own
+  meaning, "the active layout has a VU box". `GETSCREEN` carries `scrtext`, `scrvu`, `scrstyle` and
+  `scrpeak`.
+- `screensavervupeak` is deliberately not `vupeaks`: `screensaverVUpeak` is a store of its own, and the
+  widget reads it through `VuWidget::_vupeak()` whenever the instance is the pinned one - the same split
+  `_style()` makes for `screensaverVUStyle` against `vustyle`. It owns the peak markers and every axis or
+  reference line in every style, which is why the label is "VU Meter Peaks / Axis" on both rows.
+- A screensaver setting is applied where it is visible. Every `screensaver*` command shares one helper that,
+  while the device is already in `SCREENSAVER` or `SCREENBLANK`, queues an `SSREBUILD` carrying the mode the
+  blank switches now describe - the same choice [`network.cpp`](../src/core/network.cpp) makes when the
+  countdown fires - instead of waking the device to the player. `SSREBUILD` calls
+  `Display::_enterScreensaver()` directly rather than going through `_switchMode()`, which cannot serve it:
+  the first guard on that function's fifth line drops a request for the mode the device is already in, and the
+  second drops any request while the network is transient, and either one leaves the old picture running.
+  `_enterScreensaver()` holds what `_switchMode()`'s screensaver branch used to do, including lighting the
+  panel again so a rebuild out of `SCREENBLANK` shows the picture rather than a dark screen. The two enable
+  switches (`screensaverenabled`, `screensaverplayingenabled`) still return to the player, because with the
+  governing one off the screensaver should not be up at all - and that exit is the route that resets
+  `screensaverTicks`/`screensaverPlayingTicks`. The cost is the panel clear a rebuild goes through, one full
+  blit of black before the rebuilt picture; that clear is what owns the whole panel when a box shrinks.
 - Central command router for WS, URL params, MQTT, and telnet fallback paths.
 - Main responsibilities:
   - map `key=value` commands into config/player/display/network actions
@@ -1080,6 +1230,12 @@ thinks the radio forgot everything. The loader-side wait (`plans/network-recover
   - persist settings with `config.saveValue(...)`
   - source-aware command policy (`WebSocket`, `HttpUrl`, `Mqtt`, `Telnet`) and shared non-WebUI blocklist checks for
     HTTP/MQTT/Telnet ingress
+  - `Commands.md` at the repository root is this file's own reference, deliberately **in the same order and the same
+    blocks** - that promise is what makes an audit a walk down two lists. `isBlockedForSource()` is the only
+    authority for its *Blocked in HTTP/MQTT/Telnet* column. Beware the names that are not commands:
+    `config.cpp`'s `CONFIG_KEY_ENTRY` keys are what a setting is stored under, and `vumeter` / `vupeak` happen to
+    exist as both. Six commands had gone undocumented before the 2026-10-07 audit
+    (`plans/commands-md-audit.md`), which is why the procedure below ends with them.
   - own shared command aliases across ingress channels (`playstation`/`play`, `boot`/`reboot`, `vol+`/`volup`,
     `dim`/`brightness`, `dspon`/`screenon`)
   - player-command parity helpers (including exact-match-first direct URL playback command routing for `playurl` /
@@ -1136,13 +1292,79 @@ thinks the radio forgot everything. The loader-side wait (`plans/network-recover
   [`layout_key.md`](../src/displays/conf/layout_key.md) documents every field and now states the write-every-field and
   keep-the-headers rules.
 
+## `src/displays/themeregistry.h` / `themeregistry.cpp`
+- **The theme registry: one flat list of ids serving two sources.** Ids `0..12` are the compiled `_themes[]`
+  table, ids `13..22` are the ten user slots whose files live in `/data/xtheme1..10.json`. Readers ask for a
+  copy (`themeCopy()`) or a name, never for the table, and the rest of the firmware only ever sees
+  `config.theme` — which is why blending the two sources needed no changes outside `config.cpp` and
+  `display.cpp`.
+- **`themeCount()` is a constant 23, and "is anything there" is a separate question** (`themeFilled()`).
+  `config.store.themeId` is persisted, so a count that shrank — or an id that moved because a file was
+  deleted — would silently re-point the device at a different theme. `themeAt()` returns `nullptr` for an
+  empty custom slot, so nothing can dereference one.
+- **`themeValidId()` has a two-phase rule, and it exists purely because of boot order.**
+  `config.loadTheme()` runs from `_initHW()`, before LittleFS is mounted, so a custom id cannot be judged on
+  that pass — answering "0" would forget the user's choice for the whole session. Until `themeLoadSlots()`
+  has read the files the custom ids are therefore left alone, the caller falls back to built-in 0 for the
+  palette, and `Startup::checkLittleFSandVer()` re-runs `loadTheme()` once the slots are known.
+- **The element table is reached only through `themeElementKey()`, `themeElementLabel()` and
+  `themeElementCount()`.** The table in `themes.h` pairs each field's wire key with a human label, and these
+  three are the only way in, so `elementIndex()`, `themeJsonFor()` and the WebUI route never index it and
+  cannot disagree about what an element is called. Past the end they return `""` rather than trapping, so a
+  loop over the count needs no guard at each use.
+- **One document shape, one parser, and one rule: known keys, missing keys zeroed.** `{ "name": "...",
+  "colors": { ".key": 565 } }` is the slot file, the Save body and the Apply body alike. Reading iterates the
+  document's own members and matches each key against `_themeElementNames` rather than looking up each of our
+  keys in turn — which keeps any key text legal, brackets and dots included, and makes an unknown key simply
+  ignorable. A key the document leaves out comes back **black**, in every context: there is no
+  inherit-from-a-base rule any more, because it made a partial file mean different things in different places
+  (the loader inherited from built-in 0, the preview from the theme in use) and the editor always sends all 43
+  keys, so it only ever mattered to a hand-made file. There is no `version` field either — the keys are the
+  contract, so nothing has to negotiate one. An `[r,g,b]` array is still accepted in place of a 565 integer.
+- **`themeJsonForAllSlots()` is the Backup All writer, and a backup is a SET of themes.** It emits the filled
+  slots in slot order and nothing else — no `null` for an empty slot and nothing padded on the end — or, when
+  exactly one slot is filled, that slot's own document, so the two export buttons agree on a one-theme device.
+  There is no placeholder because there is no layout in the file: a restore packs these themes into whatever
+  slots are free, so declaring an emptiness would describe an intent the reader does not honour.
+- **`themeJsonFor()` REPLACES the buffer it is given; it does not append, and the array writer depends on
+  knowing that.** Each element is built into its own `String` and then appended. Handing it the array's own
+  buffer overwrote the `[` with the first theme and then each element overwrote the one before, leaving the
+  last filled slot's document followed by a stray `]` — invalid JSON, and invisible until two slots were
+  filled because with one the array path returns before the second call happens. The contract is stated on
+  both functions so the next caller cannot repeat it.
+- `themeJsonFor()` builds the output by hand rather than with a serializer, so the keys are emitted exactly as
+  `themes.h` spells them. `themeStaging()` is the one scratch theme a preview is parsed into and
+  `themeStagingCopyTo()` is how the display task collects it; a second POST overwriting it is harmless, since
+  it carries newer colours for the same repaint and a torn read could only mix two of the user's own palettes.
+- **A knowingly accepted cost:** the built-in tables are `const` at namespace scope, so including `themes.h`
+  here makes a second copy for this translation unit (about 2 KB of flash). Giving them one definition would
+  mean restructuring a header that `importtheme.py` generates into.
+
 ## `src/displays/themes.h`
 - Runtime theme switching data, loaded from PROGMEM at runtime.
-- `ThemeData` struct: 35 `uint16_t` color fields + `playlist[5]` — mirrors `config.h` `theme_t`.
-- `const ThemeData _themes[] PROGMEM` — array of theme presets (default + imported).
-- `const char _themeNames[][32] PROGMEM` — display names for WebUI dropdown.
+- `ThemeData` struct: 38 `uint16_t` colour fields + `playlist[5]` — 43 in all, and it mirrors `config.h`'s
+  `theme_t`, which is what lets `memcpy` carry one into the other.
+- `const ThemeData _themes[] PROGMEM` — array of theme presets (default + imported), reached only through the
+  theme registry.
+- `const char _themeNames[][64] PROGMEM` — display names for WebUI dropdown.
 - `RGB(r,g,b)` macro packs 8-bit RGB into RGB565 `uint16_t`.
-- Populated by `importtheme.py` script.
+- **`_themeElementNames[] PROGMEM` is the contract with the theme files and the editor.** One entry per
+  `uint16_t` field of `ThemeData`, in declaration order, each pairing a `key` with a `label`. The key is the
+  wire and file name — `playlist` is 0-based (`.playlist[0]` is the first entry) so the file and the struct
+  agree directly — and the label is what a human reads, which the editor shows by default with the key a click
+  away. A label is never parsed, matched or stored, so renaming one cannot touch a byte of a theme file. **One
+  element per line is the point:** two parallel tables would let a key be added without its label and shift
+  every entry after it, while a count-based check still passed. A `static_assert` ties
+  `sizeof(ThemeData)/sizeof(uint16_t)` to the table's length: adding a field to the struct fails the build
+  until an entry is added here, rather than silently orphaning that key in every theme file already on disk.
+- **Every colour in `_themes[]` is written on the 565 steps** — `level * step`, so red and blue are
+  multiples of 8 and green of 4, the same numbers `editor.html` shows. This is a spelling of the same colour
+  and not a change to it: `(r >> 3) * 8` packs back to the same 565 that `r` did, so the 502 literals
+  `importtheme.py --quantise` moved in the shipped file compiled to a **byte-identical firmware** in all
+  three environments.
+- Populated by `importtheme.py`, which takes either an old-style `#define COLOR_*` file or a WebUI JSON
+  export (one theme or a whole backup), routes both through the same fallback rules, and snaps everything it
+  writes onto those steps. See [`importtheme.md`](../src/displays/importtheme.md).
 - **`.line` and `.vuaxis`: the two entries with no old-format source, both derived from `.div`.** `line` sits between
   `.div` and `.weather`, `vuaxis` between `.weather` and `.vupeak`, and their place in the entry is fixed because the
   entries are designated initialisers. The rules are part of the palette now, not values to eyeball: **`.line` =
@@ -2600,6 +2822,81 @@ thinks the radio forgot everything. The loader-side wait (`plans/network-recover
 ---
 
 ## WebUI Per-File Map (`data/www`)
+- **`editor.html` — the theme editor, and the only unlisted page.** It is reached by typing the URL; nothing
+  links to it, and it deliberately does not follow the WebUI's `group_*` conventions or load `theme.css`
+  (its colour fields must show the theme's values, not the WebUI's palette). Its script is inline, per the
+  rule below. Two rows: "Load theme" (the source) and "Custom Theme" (the target, with Save, Delete, Export,
+  Export All and Import beside it — every one of them acts on the target or the slot list, so they belong on
+  its row). "Load theme" lists every id,
+  empty slots included, and both *replaces* the grid and shows it on the panel when changed, because a load
+  changes the grid as much as an edit does and should look the same. "Custom Theme" only chooses the slot and
+  never touches the grid, which is what makes copy-tweak-save-to-another-slot work. The two lists decorate
+  the slots their own way — the source reads "[ Custom Theme 1 ] Name" and just "[ Custom Theme 2 ]" when
+  empty, the target reads "[ 1 ] Name" and "[ 2 ] (empty)" — so the list itself says what Save would
+  overwrite and no separate hint line is needed. There is deliberately **one button that commits**: `Save`
+  writes the slot and makes it the theme in use. Everything else is feedback — every edit is sent on a
+  debounce as a preview, so the panel follows along while a colour is hunted for, and that preview has no
+  button or checkbox of its own. Which loads preview is gated by the `quiet` flag, which marks the two fills
+  that must NOT touch the panel: the one on page open, and the one after a delete (where the device has
+  applied the fallback itself). Without that gate, merely opening the page would repaint the device with
+  whatever theme the page happens to start on. The page **opens on the theme the device is using** — the id
+  comes from `GET /themeactive.json` and that theme is what fills the grid — rather than on the first
+  built-in, so a fresh page cannot quietly commit something nobody chose; the fill is quiet, because that
+  theme is already on the panel. The status line sits above the grid rather than under it, where a page this
+  tall would have hidden it. `Delete` needs a second click, in the spirit of the danger zone. `Export`
+  downloads the selected slot through `GET /xtheme.json?slot=N` — from the device, so the file is byte for
+  byte what a save would write and can be posted straight back through Save, which is the only reason it can
+  be trusted as a backup before a filesystem reflash. `Backup All` downloads every filled slot through
+  `GET /xthemeall.json`, and the device decides the shape: one theme comes down as that theme's own document
+  (so the two buttons agree when there is only one to export), several as the array. Both **suggest a file
+  name** through `Content-Disposition`, so the browser's save dialog arrives pre-filled: `ehRadioTheme-<theme
+  name>.json` for one, filtered to what a file system will take and with an RFC 5987 form alongside when the
+  name carries accents, and `ehRadioThemes-Backup.json` for the set. The RFC 5987 `filename*` value is written
+  **unquoted** and has to stay that way: a closing `"` after the `.json` is not a delimiter there but part of the
+  value, and the browser saves the file as `.json_`, replacing the illegal character with an underscore. `Import`
+  reads a chosen
+  file locally — it never leaves the browser until it is written — and splits by shape. A **single theme** is
+  written into the selected slot and becomes the theme in use, exactly like Save, overwriting that slot with
+  no warning: it is the one import that can destroy something, and it can only ever touch the slot the user
+  chose. An **array is a restore**, written into the **free** slots in ascending order and never over an
+  occupied one, each with `use=0` so putting themes back does not change what the device is playing. A backup
+  is a set of themes rather than a map of where they sat, so the slots are packed and the file carries no
+  placeholders — and the confirmation names the slots used, because they are not the slots the themes came
+  from. **Capacity is checked before the first write**: more themes than free slots aborts the whole restore,
+  writes nothing and says so in red (`That file has 4 themes but only 2 slots are free. Delete some themes and
+  try again.`), which is also why the arming step is gone — a bulk import can no longer overwrite, so a second
+  confirm click would protect nothing. The free-slot list is asked for fresh from `themeall.json` rather than
+  trusted from page state, since it decides the whole import.
+- **The element column reads as English, and the header switches it back to the .h names.** Each row's first
+  cell shows the label from `/theme-elements.json`, with the key in its `title`, and clicking the `Element`
+  header rewrites every cell in place between label and key. The header stays a header — plain text, pointer
+  cursor, a dotted underline on hover, deliberately **not** a button, because it is the column that changes and
+  not the page — and it obeys the same rewrite-don't-rebuild rule as the dropdown labels. The view is not
+  persisted, so every load starts friendly, and the column keeps only the label or key it needs: the document
+  and the wire stay keyed by key throughout.
+- **The theme name has its own row above the table, and the R/G/B fields step in 565 levels.** The name was
+  the first row of the `<tbody>`, which put it in the element column and made it read as that column's header;
+  it is not part of the grid, so it now sits in an `.erow` above it labelled `Name` (the id and everything
+  that reads it are unchanged). The colour fields offer the levels the panel actually holds: red and blue step
+  8 up to 248, green steps 4 up to 252, and the number shown is the level times its step — `r5 << 3` — so every
+  click is exactly one level and nothing can be typed that silently collapses onto the colour next door. 248
+  and 255 are the same red (`r8 >> 3` is 31 for both), so the field's maximum reads 248 rather than 255 and
+  249-255 are simply not offered; a value typed between two steps is snapped to
+  the nearest one when the field loses focus; and the `565` column plus the swatch stay the authoritative
+  reading. Presentation only — the wire format, the files and `RGB(r,g,b)` are untouched.
+- **Each field carries its own row index, and the preview debounce is a named constant.** `buildGrid()`
+  captures the row in the listener, so `onEdit(idx)` and `onSwatch(sw, idx)` paint the row that fired rather
+  than looking one up: the earlier version used `document.activeElement`, and a click on the spinner arrows
+  fires `input` **without focusing the field**, so it painted nothing while still sending the preview — a
+  panel flash with a swatch and a 565 cell stuck on the old value. The panel is repainted after
+  `PREVIEW_DELAY` (1000 ms) of quiet, because a preview is a full widget re-init and a colour hunt should not
+  be twenty repaints.
+- **An initialiser is not a refresher, and a page must not rebuild what the user is editing.** `editor.html`
+  builds its grid exactly once. After a save or a delete it refreshes only the dropdown *labels*, in place,
+  by rewriting the text of the options that already exist — because the id set never changes, only which
+  ids hold a theme. Calling the initialiser a second time emptied the table body, rebuilt every row as a
+  fresh empty input and re-created both selects, which blanked every field and snapped the source dropdown
+  back to its first option while the user was looking at it.
 - **Keep a script inside its page when only that page uses it.** Every file in `Config::wwwFiles[]` is fetched
   separately by the OTA updater and each fetch pays its own HTTPS handshake, so fewer files means a faster update for
   every device in the field - the byte count of the file barely matters beside that. `search.html`, `curated.html` and
@@ -2751,6 +3048,29 @@ thinks the radio forgot everything. The loader-side wait (`plans/network-recover
   - common display core wrapper and API layer used by `core/display.cpp`.
 - `src/displays/widgets/widgets.h`, `widgets.cpp`, `widgetsconfig.h`
   - widget classes (scroll, text, bars, VU, clock, playlist, etc.).
+  - **The scroll mark is the widget's own.** `ScrollWidget`'s constructor and `init()` take no separator: they build
+    `_sep` from `scrollMark()`, a helper in `widgets.cpp` that owns the mark, its character and its one date, so no
+    other file names a character and changing it is one edit. The mark is `«` (`SCROLL_MARK_TEXT`, spelled as UTF-8 -
+    a bare 0xAB byte is a stray continuation to `preTextString()` and would be dropped, not drawn) and
+    `SCROLL_MARK_ICON` - a two-cell icon from `icons.h`'s `ICON_TABLE`, drawn by the display layer, so it needs no
+    font support - on Canada Day: `scrollMark()` asks `network.timeinfo` for `tm_mon == 6 && tm_mday == 1` and
+    nothing else, because a wrong clock is simply not 1 July, with `EVERYDAY_IS_CANADA_DAY` as an `#ifdef` for
+    looking at the icon on any day. `_setMark()` allocates `strlen(mark) + 1` (the old code hard-coded four bytes,
+    which is what made a two-byte mark impossible), measures it with `utf8_strlen` rather than `strlen` - the mark
+    may be multi-byte and `_sepwidth` is what the scroll cycle is measured against - and leaves the previous mark in
+    place if the allocation fails. `_refreshMark()`, first thing in `loop()`, re-asks and rebuilds only when the mark
+    actually differs, so a date that rolls over while the device runs lands on the next pass and nothing is
+    reallocated in between. `scrollMark()` is declared in `widgets.h` because the screensaver's info line joins its
+    own parts with it too - the literal `" * "` that used to sit in `_screensaverLine()` is gone. See
+    `plans/holiday-icons.md`.
+  - **A scrolling line owns its whole span, and now says so.** `ScrollWidget::_spanPainted()` records
+    `_oldleft`/`_oldtextwidth` as the span and sets `_textPainted`, and is called at the end of the scrolling paints
+    in `setText()` and in `_draw()`. Both erase sites - `TextWidget::_paint()` and `ScrollWidget::setText()`'s
+    non-scrolling branch - erase the UNION of the old and the new rectangle, so without that record a later, shorter
+    text erased only its own box and left a previously scrolling line's pixels standing around it. Invisible wherever
+    a background bar covers the row (the TFT's `_metabackground`) and obvious where none does: the OLED's meta line
+    showing `VOLUME` over a scrolling station name. `_clear()` reads the same two flags, so a hidden scrolling line
+    left its pixels behind the same way. See `plans/layout-widget-overlap.md`.
   - **Boot-line messages** (what the `_bootstring` line says while the boot is blocked): one request type per message in
     `displayRequestType_e` (`common.h`) plus a case in `Display::draw()` that does
     `_bootstring->setText(l10n(L10N_MSG_...))`. The three are `WAITFORSD`, `FORMATTING` and `SCANNINGWIFI` — the last
@@ -3032,6 +3352,13 @@ surface:
 The shared box fill in `_draw()` is the clear for **every** style, including the tail-clear bar family: every fill and
 `_clear()` stops at `len`, so the final (clamped) segment is only clean because the box was cleared first. Do not
 reintroduce `drawRGBBitmap` here — the manual blit is deliberate (see the memory-ownership notes above).
+
+**The bar family's shape is two macros** — `VU_BAR_PERCENT` (20) and `VU_BAR_GAP_PERCENT` (10), at the top of
+`resolveScreensaverBox()` in `widget_vu.cpp`, read as percentages of the content height. Each channel is one
+`VU_BAR_PERCENT`, the gap between them is `VU_BAR_GAP_PERCENT`, and the remainder is placement, split evenly above
+and below by the centring — the shipped shape is `25 + 20 + 10 + 20 + 25`. Both Bars and Digital LED go through this
+path (`case VU_STYLE_DIGITAL_LED: _drawBars(true);`). Above the pixel budget the bar and the gap scale by one
+factor, so that shape draws literally only where the budget does not bite.
 
 **Two kinds of layout, one drawing rule.** The **bar family** (styles 0-1) draws two strips where `bandsConf` says they
 are, so `rotateVU`, `align` and `boomboxVU` all matter to it, exactly as they always have. **Every other style** (2-6)
@@ -3595,18 +3922,21 @@ This section is specifically for adding/removing settings and avoiding missed li
    - persist with `saveValue(...)`
    - trigger display/network side effects and request updates as needed.
 7. Add WebUI wiring:
-   - element in `data/www/settings.html` with id and `data-command`.
+   - element in `data/www/options.html` with id and `data-command`.
    - fallback label text + `data-i18n` key.
    - add i18n key in `src/locale/www/en_US.json` (and optionally others).
 8. Ensure websocket UI apply path exists in `data/www/script.js`:
    - `setupElement(...)` supports element type/id.
    - incoming `GET*` payload key matches DOM element id or custom handler.
-9. If setting is locale/time/weather related, update `data/www/settings.js` apply handlers too.
+9. If setting is locale/time/weather related, update `data/www/options.js` apply handlers too.
 10. Telnet command handling is thin-dispatch by default: update `src/core/commandhandler.cpp` first, and only extend
     `src/core/telnet.cpp` if protocol normalization needs a new alias/form.
 11. If setting affects startup behavior, check `main.cpp`, `config.init()`, and `startup.startupServices()`.
 12. Update this `code-summary.md`.
-13. Update `Commands.md`.
+13. Update `Commands.md`: the entry goes in the same block and at the same position as its `cmdIs(...)`
+    branch, because the file's whole value is that walking it and this router together is mechanical. If
+    the command is refused for HTTP/MQTT/Telnet, that comes from `isBlockedForSource()` and the doc's
+    *Blocked* column has to match it - nothing else is authoritative for that column.
 
 ## When removing a setting field
 

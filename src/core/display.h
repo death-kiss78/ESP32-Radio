@@ -44,6 +44,7 @@ class Display {
     void _setRSSI(int rssi);
     void _station();
     void _title();
+    void _titleTexts();
     void _time(bool redraw = false);
     void _volume();
     void flip();
@@ -52,7 +53,10 @@ class Display {
     void applyTheme(uint8_t id);
     uint8_t getThemeCount();
     void applySystemFont(uint8_t id);
+    uint8_t getSystemFontCount();
     void applyClockFont(uint8_t id);
+    uint8_t getClockFontCount();
+    void applyFonts(uint8_t systemId, uint8_t clockId);
     String getThemeListJson();
     String getLayoutListJson();
     String getSystemFontListJson();
@@ -92,6 +96,14 @@ class Display {
     // widgets and then its sub-pages in insertion order, so that is what makes the line paint above the bottom row.
     Page *_overLinePage = nullptr;
     VuWidget *_vuwidget = nullptr;
+    // The screensaver's two widgets: the only ones no layout provides.  Created on the first screensaver
+    // entry and kept, because the VU's canvas is a PSRAM allocation worth not re-making, and
+    // re-initialised on every entry rather than once, because the segmentation comes from the active
+    // layout's bandsConf and the line's text size from metaConf.  See plans/screensaver-overhaul.md.
+    VuWidget *_ssvu = nullptr;
+    ScrollWidget *_sstext = nullptr;
+    bool _ssFailed = false;   // no PSRAM for the VU canvas: log once, then keep the clock screensaver
+    bool _ssMeterUp = false;  // set by _screensaverWidgets(): the meter owns the panel, so the clock stays hidden
     NumWidget *_nums = nullptr;
     ClockWidget *_clock = nullptr;
     Page *_boot = nullptr;
@@ -107,13 +119,19 @@ class Display {
     uint8_t _bootStep = 0;
     displayRequestType_e _deferredType = NOPE;
     int _deferredPayload = 0;
+    // Requests that could not be queued inside DSQ_SEND_DELAY.  Dropping is the deliberate choice under load,
+    // but it must not be silent: a lost NEWMODE looks exactly like the setting that asked for it doing
+    // nothing, which is how a full reset came to look like a battery problem.
+    uint32_t _droppedRequests = 0;
     uint32_t _deferredDueMs = 0;
     void _createDspTask();
     void _reinitWidgets();
     void _setLayoutPointers();
     void _syncLineRule(FillWidget*& w, const FillConfig* conf, bool under);
     void _applyMetaInvert();
-    void _applyState();
+    // inPlace is the editor's live preview: the same re-init, but the current page is refilled where
+    // it stands instead of the device being sent to the player page, so nothing else changes.
+    void _applyState(bool inPlace = false);
     void _showDialog(const char *title);
     void _showNumbers(const char* header, int32_t value, const char* fmt, bool dialogPage);
     void _setReturnTicker(uint8_t time_s);
@@ -125,8 +143,27 @@ class Display {
     void _switchMode(displayMode_e newmode);
     void _updateBattery();
     void _updateVolume();
+    // Screensaver composition.  The strip is the info line plus a clear gap above and below it, and is 0
+    // when the prefs do not ask for the line or the panel is too short to afford it; _ssContentH() is
+    // what is left over for the clock or the meter.
+    uint16_t _ssStripH();
+    uint16_t _ssContentH();
+    uint16_t _ssTextTop();
+    void _screensaverLine();
+    void _screensaverWidgets();
+    // Bring the screensaver up, or rebuild it where it stands.  Not part of _switchMode() because a rebuild
+    // is not a mode change - see the SSREBUILD request.
+    void _enterScreensaver(displayMode_e mode);
     void _buildJsonCache();
+    // Kept apart from _buildJsonCache() because the registry can change after that runs once - a slot
+    // saved or deleted from the editor, or the slot files read after the cache was built - so
+    // getThemeListJson() rebuilds this one list when its generation has moved.
+    void _buildThemeListJson();
     String _themeListJson;
+    uint16_t _themeListGen;
+    // A THEMEPREVIEW is already on the queue.  Set from the result of the send and cleared where the
+    // request is handled, so it can never be left stuck by a dropped request (see putRequest).
+    bool _previewPending;
     String _layoutListJson;
     String _systemFontListJson;
     String _clockFontListJson;
@@ -162,7 +199,10 @@ class Display {
     String getClockFontListJson()  { return "[]"; }
     void applyTheme(uint8_t) {}
     void applySystemFont(uint8_t) {}
+    uint8_t getSystemFontCount() { return 1; }
     void applyClockFont(uint8_t) {}
+    uint8_t getClockFontCount() { return 1; }
+    void applyFonts(uint8_t, uint8_t) {}
     uint8_t getThemeCount() { return 1; }
     void applyInvertTitle() {}
     void invert() {}

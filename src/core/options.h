@@ -809,6 +809,15 @@ or examine the examples in builds/trip5 and make your own!
 #ifndef STREAM_RETRY_RESPAWN_MS
   #define STREAM_RETRY_RESPAWN_MS 5000 // ms a resume may stay owed with no retry task before ticks() starts a new one
 #endif
+#ifndef STREAM_RESET_MAX
+  #define STREAM_RESET_MAX 3 // link resets allowed in one outage before the restart rung is reached
+#endif
+#ifndef RECOVERY_REBOOT_MAX
+  #define RECOVERY_REBOOT_MAX 2 // consecutive recovery restarts before the escalation gives up and retries patiently
+#endif
+#ifndef RECOVERY_HEALTHY_MS
+  #define RECOVERY_HEALTHY_MS 600000 // ms of continuous playback that clears the restart count: the wedge is gone
+#endif
 #ifndef NET_REFUSAL_MS
   #define NET_REFUSAL_MS 700 // a failed connect faster than this was refused, so the link is fine
 #endif
@@ -1442,9 +1451,11 @@ or examine the examples in builds/trip5 and make your own!
 #endif
 // A note here that layouts and themes cannot be given a default... sorry!
 /* Define your display font as: #define DISPLAYFONT X11       */
-#define MATRIXLIGHT     0
-#define MATRIXCHUNKY    1
-#define X11             2   // Unix X11 6x9 fixed-width
+#define MATRIXLIGHT     0 // Trip5's Matrix Light 8x6 font
+#define MATRIXCHUNKY    1 // Trip5's Matrix Chunky 8x6 Font
+#define X11             2 // Unix X11 6x9 fixed-width font (fit to 6x8)
+#define HP100LX         3 // HP 100LX and 200LX Palmtom Computersfont
+#define ATISMALLWONDER  4 // ATI Small Wonder Graphics Solution font (small character set)
 #ifndef DISPLAYFONT
   #define DISPLAYFONT MATRIXCHUNKY
 #endif
@@ -1454,7 +1465,8 @@ or examine the examples in builds/trip5 and make your own!
 #define YO_MONO         0  // The classic yoRadio font was removed and replaced with LEDCLOCK
 #define CHUNKY6_PX      1  // Default (spacing pixels) - great on color screens
 #define CHUNKY6PX       1  // An alias for above...
-#define CHUNKY6         2  // Really heavy looking - great on mono screens
+#define CHUNKY6         2  // Really heavy looking - great on mono OLED screens
+
 #ifndef CLOCKFONT
   #if DSP_MODEL==DSP_SH1106 || DSP_MODEL==DSP_SH1107 || DSP_MODEL==DSP_SSD1305 || DSP_MODEL==DSP_SSD1306 || DSP_MODEL==DSP_SSD1327
     #define CLOCKFONT CHUNKY6 // OLEDs
@@ -1514,6 +1526,18 @@ or examine the examples in builds/trip5 and make your own!
 #endif
 #ifndef SS_FULL_DATETIME
   #define SS_FULL_DATETIME false
+#endif
+#ifndef SS_TEXT
+  #define SS_TEXT false
+#endif
+#ifndef SS_VU
+  #define SS_VU false
+#endif
+#ifndef SS_VU_STYLE
+  #define SS_VU_STYLE VU_STYLE_DEFAULT // numeric 0-index
+#endif
+#ifndef SS_VUPEAK
+  #define SS_VUPEAK SHOW_VU_PEAK // numeric 0-index
 #endif
 #ifndef DIMMING_ENABLED
     #define DIMMING_ENABLED false
