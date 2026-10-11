@@ -1,9 +1,9 @@
 .pio
 .vscode
 /platformio.ini
-/myoptions.h
 /*.h
 /Notes.txt
+/myoptions.h
 *.lck
 *._bk
 /plans
