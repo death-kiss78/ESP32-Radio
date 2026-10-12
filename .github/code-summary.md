@@ -1190,6 +1190,8 @@ thinks the radio forgot everything. The loader-side wait (`plans/network-recover
   - `handleNotFound`: checks PSRAM cache first for GET requests, cache-busting `?v=` stripping removed (max-age=60
     handles freshness)
   - `handleIndex`: serves `player.html` from PSRAM cache for `GET /`
+  - HTTP sleep queries treat `sleep` as an optional wake-up duration and `after` as an independent delay before
+    deep sleep; an omitted or zero wake duration leaves the timer wake source disabled
   - route handlers (`/`, `/search`, `/update`, `/locale.json`, `/ready`, etc.)
   - `/visuals.json` — the VU style list, built **at request time** from one static `{ id, label, needsPcm }` table, so
     the WebUI select can only offer what the running build can draw: waveform and Lissajous are omitted on a VS1053
@@ -4071,5 +4073,4 @@ by the shared HTTP/MQTT/Telnet non-WebUI policy.
 ---
 
 > Tracked issues and risk notes are in `.github/code-issues.md`.
-
 

@@ -110,7 +110,7 @@ void Utility::sleepCore() {
 void Utility::doSleep() {
   #ifndef DEEP_SLEEP_DISABLE
     sleepCore();
-    esp_sleep_enable_timer_wakeup(sleepfor * 60 * 1000000ULL);
+    if (sleepfor > 0) esp_sleep_enable_timer_wakeup(sleepfor * 60 * 1000000ULL);
     esp_deep_sleep_start();
   #endif
 }
