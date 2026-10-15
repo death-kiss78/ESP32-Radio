@@ -97,7 +97,7 @@ bool CommandHandler::exec(const char *command, const char *value, uint8_t cid, C
         if (sscanf(value, "%d", &sfor) != 1) return false;
         safter = 0;
       }
-      if (sfor <= 0 || safter < 0) return false;
+      if (sfor < 0 || safter < 0 || (sfor == 0 && safter == 0)) return false;
       network.cancelStreamRetry();
       utility.sleepForAfter(static_cast<uint16_t>(sfor), static_cast<uint16_t>(safter));
       return true;
@@ -359,4 +359,3 @@ bool CommandHandler::exec(const char *command, const char *value, uint8_t cid, C
 /* end of commandHandler */
   return false;
 }
-

@@ -381,14 +381,20 @@ depending on the selected PlatformIO environment and macro definitions.
   8. if no connectivity: start minimal server + controls + display start and return
   9. if connectivity:
      - `config.initPlaylistMode()`
-     - `netserver.begin()`
-     - `telnet.begin()`
+     - `telnet.begin()` — early on purpose: a listening socket with no task of ours, so it costs nothing
      - controls init
      - display start
      - MQTT init when enabled in settings
      - optional smart-start playback
      - `startup.startupServices()`
      - `netserver.setBootReady(true)` only after setup work is actually complete
+     - **`netserver.begin()` deliberately does NOT happen here.** The WebUI is held back until the startup
+       services are out of the way, because `begin()` is where the request queue, the listener, mDNS *and* the
+       PSRAM WebUI file cache (up to ~300 KB) are allocated, and a WebUI connection landing while a service makes
+       its own TLS connection is what overwhelms the network stack. `Startup::loop()` starts it (see that
+       section); the footer IP is the indicator, because `Display::_footerIp()` draws nothing until
+       `netserver.isListening()`. The AP and SDOFFLINE paths still start it here — the captive portal is the only
+       way in on a first boot, and offline mode runs no services at all.
 - `loop()`:
   - AP mode: Improv + captive DNS
   - normal: telnet loop
@@ -528,6 +534,15 @@ All modules in `src/core/` follow the **class + global instance** pattern:
 
 ## `src/core/startup.h` / `startup.cpp`
 - Boot-only orchestration module following the standard core `class + global instance` pattern (`Startup startup;`).
+- **`loop()` is also where the WebUI starts, and the three service states are what decides it.** The condition is
+  `!netserver.isListening() && network.status == CONNECTED && (_services != SVC_WILL_RUN || cardInUse())`, at the
+  very top of `loop()` — above its `_bootStablePending` early return, which is why it cannot live at the end of
+  `setup()`. All three parts are load-bearing. Waiting only for `SVC_DONE` would leave **SD mode with no WebUI**:
+  `SVC_WILL_RUN` means the task was *created*, and it parks in `while (cardInUse())`, which is exactly when the
+  WebUI is needed to switch back to web radio. `SVC_NONE` is the opposite trap — no WiFi, no `UPDATEURL` or the
+  web files missing means no services are coming, so nothing else would ever start the server. `begin()` creates a
+  fresh queue on every call, so `isListening()` is what keeps the trigger idempotent, and the trigger sends `NEWIP`
+  so the footer IP appears with the server rather than at boot.
 - **Boot stability is a state, not a timer.** `Startup::_services` is `SVC_NONE` / `SVC_WILL_RUN` / `SVC_DONE`, and
   `setup()` has already settled which one applies by the time `loop()` can run, because `startupServices()` has exactly
   one call site — [`main.cpp:142`](src/main.cpp:142), inside `setup()`. `loop()` then has three exits: `SVC_NONE` proves
@@ -955,6 +970,31 @@ thinks the radio forgot everything. The loader-side wait (`plans/network-recover
 - Uses shared utility helpers for string normalization instead of keeping those helpers in `config.cpp`.
 - Audio info/bitrate/ID3 notifications are emitted through shared logging macros so telnet+serial output stays
   consistent with the rest of the firmware log contract.
+- **The title line is two halves assembled from two sources**: `_song` and `_second`, each holding its text, the
+  time it arrived and which source wrote it. The playlist route is `handleShowStreamTitle()` (an `#EXTINF`/icy
+  string, split at its first `" - "`); the ID3 route is `handleId3Title()` into the song half and
+  `handleId3Artist()` into the second, with `handleId3Album()` accepted there only while no artist is known for
+  the item. **ID3 outranks the playlist for the same item**, so an `#EXTINF` line that arrives first is replaced
+  the moment the matching ID3 tag arrives. A half older than `META_SETTLE_MS` (1500 ms, a file-local constant and
+  deliberately not an `options.h` define) is never paired with a newer partner - that is what keeps a value from a
+  previous item, or a previous source, out of the pair - and before the window expires a lone half is held rather
+  than shown, so the panel never displays a state that is about to complete. Publication is one
+  `config.setTitle()`, only when the composed string differs from the title field, and the due check is
+  `audioHandlers.tick()` from `Player::loop()`: no task, no timer, no new heap. In `PM_SDCARD` the window is zero
+  and pairing is unconditional, which reproduces the old title/album behaviour exactly, and an SD artist still
+  names the station. `resetMetadata()` clears both halves and is called from `Player::_play()` and
+  `Player::playUrl()`; `handleBeginSdRead()` keeps its own clear.
+- **The artist has no destination of its own.** The second line is carried inside the title string, and
+  `Display::_titleTexts()` splits `config.station.title` at its first `" - "`, so a stream that sends an artist but
+  never a song shows it in the first line.
+- **An HLS stream now recovers from a segment gap on its own.** The library's media-sequence counter is a function
+  static whose only reset came from a fresh connect, and the resynchronisation that would have re-derived it sat
+  after the parsed playlist had been cleared - so it could never run. A two-segment gap therefore wedged the
+  stream permanently: silence, a manifest request per poll period, and no `[Network]` line, because the audio
+  library still reported itself running and our retry ladder's arm gate (`!player.isRunning()`) stayed shut. A
+  pause/play was the only cure. The accept loop now rebuilds the connect state when both of its probes miss, and
+  the manifest poll waits instead of spinning. The library-side detail, including the identical VS1053 change and
+  the VS1053 `TIT2` wiring, is in the frankenstein-surgery notes.
 
 ## `src/core/display.h` / `display.cpp`
 - `display.h` declares Display class and display mode/change API.
@@ -1150,6 +1190,8 @@ thinks the radio forgot everything. The loader-side wait (`plans/network-recover
   - `handleNotFound`: checks PSRAM cache first for GET requests, cache-busting `?v=` stripping removed (max-age=60
     handles freshness)
   - `handleIndex`: serves `player.html` from PSRAM cache for `GET /`
+  - HTTP sleep queries treat `sleep` as an optional wake-up duration and `after` as an independent delay before
+    deep sleep; an omitted or zero wake duration leaves the timer wake source disabled
   - route handlers (`/`, `/search`, `/update`, `/locale.json`, `/ready`, etc.)
   - `/visuals.json` — the VU style list, built **at request time** from one static `{ id, label, needsPcm }` table, so
     the WebUI select can only offer what the running build can draw: waveform and Lissajous are omitted on a VS1053
@@ -3282,6 +3324,13 @@ behaviors:
   be applied to both.
 
 Important rendering invariants:
+- **The clip rectangle is half-open**: `setClipping({left, top, w, h})` admits `left .. left+w-1` and
+  `top .. top+h-1`. `writePixel()` tests both trailing edges with `>=` (it used `>`, which let exactly one pixel
+  column and one pixel row escape), and `writeFillRect()` clamps its rectangle to those bounds rather than testing
+  only its origin. One pixel of escape is invisible on a framebuffer build — the PSRAM buffer clips by its own
+  bounds — and visible on a monochrome panel, where it is the glyph column that a scrolling line's deliberately
+  oversized window (one glyph more than the span holds) prints past its span and no later erase covers. See
+  `plans/clip-rect-off-by-one.md`.
 - Never call `startWrite()`/`endWrite()` in `write()` or `writePixel`/`writeFillRect` overrides — SPI nesting causes
   hangs on Adafruit TFT drivers.
 - The `gfxFont == NULL` case (YO_MONO / display font) runs through `_writeGlyph` using DisplayFont, NOT the built-in
@@ -3352,6 +3401,14 @@ surface:
 The shared box fill in `_draw()` is the clear for **every** style, including the tail-clear bar family: every fill and
 `_clear()` stops at `len`, so the final (clamped) segment is only clean because the box was cleared first. Do not
 reintroduce `drawRGBBitmap` here — the manual blit is deliberate (see the memory-ownership notes above).
+
+**The bar family is a full wipe plus a full repaint, and that is deliberate.** A brief incremental path — a band
+between the old and the new tip, with a dirty-rectangle blit — was removed (2026-10-10) because its correctness rested
+on `_prev*` state that had to describe the canvas exactly, and it kept leaving leftovers in the vspace gaps and the
+inter-channel strip. `_draw()` now wipes the whole box for every style unconditionally, `_blit()` always sends the
+whole box, and the dirty rectangle, `_prevMeas*` / `_prevPk*` / `_prevStyle` / `_prevVupeak`, `_selfErasing()` and
+`Widget::_invalidate()` are gone. Do not reintroduce a partial blit without the wipe it depends on. See
+[`plans/vu-bars-full-repaint.md`](../plans/vu-bars-full-repaint.md).
 
 **The bar family's shape is two macros** — `VU_BAR_PERCENT` (20) and `VU_BAR_GAP_PERCENT` (10), at the top of
 `resolveScreensaverBox()` in `widget_vu.cpp`, read as percentages of the content height. Each channel is one
@@ -4016,5 +4073,4 @@ by the shared HTTP/MQTT/Telnet non-WebUI policy.
 ---
 
 > Tracked issues and risk notes are in `.github/code-issues.md`.
-
 
