@@ -11,6 +11,7 @@
 #include "netserver.h"
 #include "network.h"
 #include "player.h"
+#include "playlistvalidator.h"
 #include "utility.h"
 #ifdef USE_SD
   #include "filemanager.h"
@@ -37,7 +38,7 @@ bool CommandHandler::isBlockedForSource(const char *command, CommandSource sourc
     "getindex", "getactive",
     "getsystem", "getscreen", "getlocale", "getcontrols", "getweather", "getmqtt", "getbattery",
     "curated_import", "loadindex", "loadplaylist",
-    "newmode", "locale_webui",
+    "newmode", "locale_webui", "plvalidate",
     "irbtn", "chkid", "irclr"
   );
 }
@@ -54,6 +55,16 @@ bool CommandHandler::exec(const char *command, const char *value, uint8_t cid, C
       return false;
     }
   #endif
+
+  // The playlist validator owns the audio for the whole sweep, so only its own command and the read-only state
+  // getters pass.  A whitelist, so a command added later is refused by default rather than needing to be listed.
+  // plvalidate is the Cancel path; the get* names only queue state to a client, which keeps a page loaded
+  // mid-sweep able to populate itself.
+  if (playlistValidator.active() &&
+      !cmdIs(command, "plvalidate",
+             "getindex", "getactive", "getsystem", "getscreen", "getlocale",
+             "getweather", "getcontrols", "getmqtt", "getbattery"))
+    return false;
 
   /* Websockets for Player */
   if (cmdIs(command, "toggle"))      { network.cancelStreamRetry(); controls.screenSaverExit(); player.toggle(); return true; }
@@ -84,6 +95,7 @@ bool CommandHandler::exec(const char *command, const char *value, uint8_t cid, C
   if (cmdIs(command, "shuffle"))         { config.saveValue(&config.store.sdshuffle, static_cast<bool>(atoi(value))); if (config.store.sdshuffle) player.next(); return true; }
   if (cmdIs(command, "start"))           { controls.screenSaverExit(); if (config.getMode() == PM_WEB) return player.resumeLastWebSource(); player.sendCommand({PR_PLAY, config.lastStation()}); return true; }
   if (cmdIs(command, "stop"))            { network.cancelStreamRetry(); controls.screenSaverExit(); player.sendCommand({PR_STOP, 0}); return true; }
+  if (cmdIs(command, "plvalidate"))      { if (atoi(value)) playlistValidator.start(); else playlistValidator.stop(); return true; }
   #ifndef DEEP_SLEEP_DISABLE
     if (cmdIs(command, "sleep")) {
       if (value[0] == '\0') {
@@ -150,12 +162,14 @@ bool CommandHandler::exec(const char *command, const char *value, uint8_t cid, C
   if (cmdIs(command, "invertdisplay")) { config.saveValueButWait(&config.store.invertdisplay, static_cast<bool>(atoi(value)), 5000); return true; } //display.invert();
   if (cmdIs(command, "inverttitle"))   { config.saveValueButWait(&config.store.inverttitle, static_cast<bool>(atoi(value)), 5000); display.applyTheme(config.store.themeId); return true; }
   if (cmdIs(command, "layout"))        { uint8_t id = constrain(atoi(value), 0, display.getLayoutCount() - 1); config.saveValueButWait(&config.store.layoutId, id, 5000); display.applyLayout(id); netserver.requestOnChange(GETACTIVE, 0); return true; }
-  if (cmdIs(command, "theme"))         { uint8_t id = constrain(atoi(value), 0, display.getThemeCount() - 1); config.saveValueButWait(&config.store.themeId, id, 5000); display.applyTheme(id); return true; }
+  if (cmdIs(command, "theme"))         { uint8_t id = constrain(atoi(value), 0, display.getThemeCount() - 1); config.saveValueButWait(&config.store.themeId, id, 5000); display.applyTheme(id); netserver.requestOnChange(GETACTIVE, 0); return true; }
   if (cmdIs(command, "sysfont"))       { uint8_t id = constrain(atoi(value), 0, display.getSystemFontCount() - 1); config.saveValueButWait(&config.store.systemFontId, id, 5000); display.applySystemFont(id); netserver.requestOnChange(GETACTIVE, 0); return true; }
   if (cmdIs(command, "clockfont"))     { uint8_t id = constrain(atoi(value), 0, display.getClockFontCount() - 1); config.saveValueButWait(&config.store.clockFontId, id, 5000); display.applyClockFont(id); netserver.requestOnChange(GETACTIVE, 0); return true; }
   if (cmdIs(command, "numplaylist"))   { config.saveValueButWait(&config.store.numplaylist, static_cast<bool>(atoi(value)), 5000); display.putRequest(NEWMODE, CLEAR); display.putRequest(NEWMODE, PLAYER); return true; }
+  if (cmdIs(command, "playlistpages")) { config.saveValueButWait(&config.store.playlistPages, static_cast<bool>(atoi(value)), 5000); display.putRequest(APPLYSTATE); return true; }
   if (cmdIs(command, "clock12"))       { config.saveValueButWait(&config.store.clock12, static_cast<bool>(atoi(value)), 5000); display.putRequest(CLOCK); return true; }
   if (cmdIs(command, "clockglow"))     { config.saveValueButWait(&config.store.clockglow, static_cast<bool>(atoi(value)), 5000); display.putRequest(APPLYSTATE); return true; }
+  if (cmdIs(command, "allcaps"))       { config.saveValueButWait(&config.store.pretextALLCAPS, static_cast<bool>(atoi(value)), 5000); display.putRequest(APPLYSTATE); return true; }
   if (cmdIs(command, "volumepage"))    { config.saveValueButWait(&config.store.volumepage, static_cast<bool>(atoi(value)), 5000); display.putRequest(NEWMODE, PLAYER); return true; }
   if (cmdIs(command, "bufferbar"))     { config.saveValueButWait(&config.store.bufferbar, static_cast<bool>(atoi(value)), 5000); display.putRequest(SHOWBUFFERBAR); return true; }
   if (cmdIs(command, "vumeter"))       { config.saveValueButWait(&config.store.vumeter, static_cast<bool>(atoi(value)), 5000); display.putRequest(SHOWVUMETER); return true; }
@@ -281,7 +295,7 @@ bool CommandHandler::exec(const char *command, const char *value, uint8_t cid, C
 
   /* Options: Danger Zone */
   if (cmdIs(command, "reboot", "boot"))  { FUNCTIONLOG("REBOOT", "Reboot triggered by command."); delay(10); ESP.restart(); return true; }
-  if (cmdIs(command, "format"))  { player.sendCommand({PR_STOP, 0}); FUNCTIONLOG("FORMAT", "Formatting LittleFS."); logRingShutdown(); delay(10); LittleFS.format(); FUNCTIONLOG("REBOOT", "Rebooting."); delay(10); ESP.restart(); return true; }
+  if (cmdIs(command, "format"))  { player.sendCommand({PR_STOP, 0}); FUNCTIONLOG("FORMAT", "Formatting LittleFS."); delay(10); LittleFS.format(); FUNCTIONLOG("REBOOT", "Rebooting."); delay(10); ESP.restart(); return true; }
   if (cmdIs(command, "reset"))   { FUNCTIONLOG("RESET", "Reset all settings requested."); config.defaultSettings(value, cid); return true; } // also used by Section resets
 
   /* IR Recorder */

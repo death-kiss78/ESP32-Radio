@@ -50,6 +50,10 @@ extern uint32_t vuPsramBytes;
 #define MDNS_LENGTH 32
 #define EHDPNAME_LENGTH 32
 
+static constexpr size_t STATION_FIELD_LENGTH = 170; // Max length for station name, URL and title fields
+static constexpr size_t WEATHER_STRING_L = 512; // Weather string buffer
+static constexpr uint32_t NVS_SLOW_WRITE_MS = 50; // ms a single NVS commit may take before FUNCTIONLOG names the key
+
 #define ESPFILEUPDATER_USERAGENT "ehradio/" RADIOVERSION "(" GITHUBURL ")"  // used as a user-agent string for downloading with ESPFileUpdater
 
 #if ESP_ARDUINO_VERSION >= ESP_ARDUINO_VERSION_VAL(3, 0, 0)
@@ -65,7 +69,6 @@ struct theme_t {
   uint16_t background;
   uint16_t meta;
   uint16_t metabg;
-  uint16_t metafill;
   uint16_t title1;
   uint16_t title2;
   uint16_t digit;
@@ -99,7 +102,6 @@ struct theme_t {
   uint16_t volbarin;
   uint16_t plcurrent;
   uint16_t plcurrentbg;
-  uint16_t plcurrentfill;
   uint16_t playlist[5];
 };
 struct config_t // specify defaults here (and macros in options.h) (defaults are NOT saved to Prefs)
@@ -137,18 +139,17 @@ struct config_t // specify defaults here (and macros in options.h) (defaults are
   uint8_t   themeId = 0;
   bool      dspon = true;
   bool      numplaylist = NUMBERED_PLAYLIST;
+  bool      playlistPages = PLAYLIST_MODE_PAGED;  // the playlist screen's drawing mode; was the PLAYLIST_MODE_PAGED macro
   bool      clock12 = CLOCK_TWELVE;
   bool      volumepage = VOLUME_PAGE;
   bool      bufferbar = SHOW_BUFFERBAR;
   bool      vumeter = SHOW_VU_METER;
   bool      vupeak = SHOW_VU_PEAK;
   uint8_t   vustyle = VU_STYLE_DEFAULT;   // which visualiser the VU box draws; see vuStyle_e
-  // Fonts are a runtime choice now (plans/font-overhaul.md), so these macros are only the boot defaults:
-  // systemFontId indexes _systemFonts/_systemFontNames in dspfont.h, clockFontId is the clock *style* (its
-  // size comes from the layout), and clockglow is the LED/VFD background behind the clock digits.
   uint8_t   systemFontId = DISPLAYFONT;
   uint8_t   clockFontId = CLOCKFONT;
   bool      clockglow = CLOCKGLOW;
+  bool      pretextALLCAPS = PRETEXT_ALLCAPS;  // was the PRETEXT_ALLCAPS macro; also drives the WebUI casing
   uint8_t   brightness = SCREEN_BRIGHTNESS;
   bool      dimmingEnabled = DIMMING_ENABLED;
   uint16_t  dimmingTimeout = DIMMING_TIMEOUT;
@@ -300,6 +301,7 @@ class Config {
     void initSDPlaylist(bool force = false);
     void initPlaylistMode();
     void loadTheme();
+    void loadLayout();
     #if IR_PIN!=255
       void loadIR();
       void saveIR();

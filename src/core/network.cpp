@@ -21,7 +21,33 @@
 #include "utility.h"
 #include "../locale/dsplocale.h"
 
+// The weather has TWO questions, and the layout editor's switch answers both.  `weatherWanted()` opens the
+// FETCH gates, which round 3 deliberately left closed - a layout can only be positioned against a real line,
+// so with the switch on the device fetches rather than showing a stand-in.  `weatherDetail()` pretends the
+// four display switches are on, so the line is the longest one any layout could show.  Neither touches
+// config.store, and display.cpp's `weatherLive()` is the sibling that decides VISIBILITY.
+static inline bool weatherWanted() { return editorOpt(config.store.showweather); }
+static inline bool weatherDetail(bool stored) { return editorOpt(stored); }
+
 #define NETWORK_TASK_STACK_BYTES (NETWORK_TASK_STACK_SIZE * 1024)
+
+static constexpr uint32_t WIFI_SETTLE_MS               = 1000;   // ms after the stack starts before connecting
+static constexpr uint32_t WIFI_SCAN_DWELL_MS           = 120;    // ms per channel; too short fails, falls back to 300
+static constexpr uint32_t WIFI_CONNECT_POLL_MS         = 100;    // connect-loop status poll
+static constexpr uint32_t WIFI_RETRY_SCALE             = 2;      // second attempt window = WIFI_ATTEMPTS * 500 ms * this
+static constexpr uint32_t WIFI_FAST_ATTEMPTS           = 4;      // ~2 s: directed reconnect to a known BSSID before a scan
+static constexpr uint32_t STREAM_RETRY_SLOW_S          = 60;     // s between retries once the fast budget is spent
+static constexpr uint32_t STREAM_RETRY_RESPAWN_MS      = 5000;   // ms a resume may stay owed before ticks() starts a task
+static constexpr uint8_t  STREAM_RESET_MAX             = 3;      // link resets allowed in one outage before restart
+static constexpr uint8_t  RECOVERY_REBOOT_MAX          = 2;      // consecutive recovery restarts before patient retries
+static constexpr uint32_t RECOVERY_HEALTHY_MS          = 600000; // ms of playback that clears the restart count
+static constexpr uint32_t NET_REFUSAL_MS               = 700;    // a failed connect faster than this was refused
+static constexpr uint32_t NETHEALTH_TIMEOUT_MS         = 700;    // ms the stack probe waits for the internet TCP connect
+static constexpr uint32_t NETHEALTH_GATEWAY_TIMEOUT_MS = 400;    // ms per gateway port probe (a LAN connect is tens of ms)
+
+// Router ports probed to tell a WAN outage from a wedged stack.  A router's UI or DNS is frequently
+// not on 80, and a wrong guess reads as "gateway silent" - a false wedged verdict.
+static const uint16_t kGatewayProbePorts[] = { 80, 53, 443, 8080 };
 
 MyNetwork network;
 
@@ -185,7 +211,7 @@ void ticks() {
       network.forceTimeSync = true;
     }
     uint16_t weatherSyncInterval = (uint16_t)config.store.weathersyncinterval * 60;
-    if (config.store.showweather && weatherSyncTicks >= weatherSyncInterval) {
+    if (weatherWanted() && weatherSyncTicks >= weatherSyncInterval) {
       weatherSyncTicks=0;
       network.forceWeather = true;
     }
@@ -223,7 +249,18 @@ void ticks() {
       display.putRequest(CLOCK);
     }
   #else
-    if (network.timeinfo.tm_year>100 || network.status == SDOFFLINE) {
+    if (network.status == CONNECTED) {
+      time_t now = time(NULL);
+      struct tm localNow;
+      if (now > 31536000 && localtime_r(&now, &localNow)) {
+        network.timeinfo = localNow;
+        display.putRequest(CLOCK);
+      } else if (network.timeinfo.tm_year > 100) {
+        network.timeinfo.tm_sec++;
+        mktime(&network.timeinfo);
+        display.putRequest(CLOCK);
+      }
+    } else if (network.timeinfo.tm_year > 100 || network.status == SDOFFLINE) {
       network.timeinfo.tm_sec++;
       mktime(&network.timeinfo);
       display.putRequest(CLOCK);
@@ -297,15 +334,23 @@ static netVerdict_e probeNetworkStack() {
   const uint32_t gwIp = (uint32_t)WiFi.gatewayIP();
   bool gwOk = false;
   uint32_t gwMs = 0;
+  uint16_t gwPort = 0;
   if (gwIp) {
-    WiFiClient lan;
     const uint32_t t0 = millis();
-    gwOk = lan.connect(IPAddress(gwIp), NETHEALTH_GATEWAY_PORT, NETHEALTH_GATEWAY_TIMEOUT_MS);
+    for (uint8_t i = 0; i < (uint8_t)(sizeof(kGatewayProbePorts) / sizeof(kGatewayProbePorts[0])); i++) {
+      WiFiClient lan;
+      if (lan.connect(IPAddress(gwIp), kGatewayProbePorts[i], NETHEALTH_GATEWAY_TIMEOUT_MS)) {
+        gwOk = true;
+        gwPort = kGatewayProbePorts[i];
+        lan.stop();
+        break;
+      }
+      lan.stop();
+    }
     gwMs = millis() - t0;
-    lan.stop();
   }
   if (gwOk) {
-    FUNCTIONLOG("Network", "stack probe: gateway ok %lums - our stack can connect", (unsigned long)gwMs);
+    FUNCTIONLOG("Network", "stack probe: gateway ok on port %u, %lums - our stack can connect", (unsigned)gwPort, (unsigned long)gwMs);
     return NET_STACK_OK;
   }
 
@@ -778,8 +823,6 @@ void MyNetwork::begin() {
     improv = new ImprovWiFi(&Serial);
     #if defined(CONFIG_IDF_TARGET_ESP32S3)
       ImprovTypes::ChipFamily chip = ImprovTypes::ChipFamily::CF_ESP32_S3;
-    #elif defined(CONFIG_IDF_TARGET_ESP32C3)
-      ImprovTypes::ChipFamily chip = ImprovTypes::ChipFamily::CF_ESP32_C3;
     #else
       ImprovTypes::ChipFamily chip = ImprovTypes::ChipFamily::CF_ESP32;
     #endif
@@ -860,11 +903,9 @@ static bool onImprovCustomConnect(const char* ssid, const char* password) {
     snprintf(deviceUrl, sizeof(deviceUrl), "http://%d.%d.%d.%d/", ip[0], ip[1], ip[2], ip[3]);
     #if defined(CONFIG_IDF_TARGET_ESP32S3)
       ImprovTypes::ChipFamily chip = ImprovTypes::ChipFamily::CF_ESP32_S3;
-    #elif defined(CONFIG_IDF_TARGET_ESP32C3)
-      ImprovTypes::ChipFamily chip = ImprovTypes::ChipFamily::CF_ESP32_C3;
     #else
-    ImprovTypes::ChipFamily chip = ImprovTypes::ChipFamily::CF_ESP32;
-  #endif
+      ImprovTypes::ChipFamily chip = ImprovTypes::ChipFamily::CF_ESP32;
+    #endif
     if (network.improv) network.improv->setDeviceInfo(chip, "ehRadio", RADIOVERSION, "ehRadio", deviceUrl);
 
     improvRebootTicker.once(3, triggerImprovReboot);
@@ -966,7 +1007,7 @@ void doSync(void * pvParameters) {
       }
     }
   }
-  if (network.weatherBuf && config.store.showweather && network.forceWeather) {
+  if (network.weatherBuf && weatherWanted() && network.forceWeather) {
     // Fetch weather without interrupting display (keep showing cached data)
     network.forceWeather = false;
     if (!getWeather(network.weatherBuf) && shouldClearWeatherCacheOnFailure()) {
@@ -1061,7 +1102,8 @@ bool MyNetwork::buildWeatherString() {
   #if (DSP_MODEL!=DSP_DUMMY)
     if (!weatherBuf) return false;
 
-    // If no cached data or cache expired, show loading message
+    // No cached data, or the cache has expired: the loading line, which the fetch already on its way will
+    // replace.  There is deliberately no sample string - a layout is positioned against real weather now.
     if (!WeatherCache::valid) {
       snprintf(weatherBuf, WEATHER_STRING_L, "%s", l10n(L10N_LBL_W_LOADING));
       display.putRequest(NEWWEATHER);
@@ -1107,19 +1149,21 @@ bool MyNetwork::buildWeatherString() {
     written = snprintf(p, remaining, "%s, %.1f%s", desc, temp_display, tempUnit);
     if (written > 0 && (size_t)written < remaining) { p += written; remaining -= written; }
     
-    if (config.store.weatherfeels && remaining > 1) {
+    // The four detail switches, each through the one helper, so the editor's switch can present the longest
+    // line a layout could ever show without writing config.store.
+    if (weatherDetail(config.store.weatherfeels) && remaining > 1) {
       written = snprintf(p, remaining, " ~ %s %.1f%s", l10n(L10N_LBL_W_FEELSLIKE), feels_display, tempUnit);
       if (written > 0 && (size_t)written < remaining) { p += written; remaining -= written; }
     }
-    if (config.store.weatherpressure && remaining > 1) {
+    if (weatherDetail(config.store.weatherpressure) && remaining > 1) {
       written = snprintf(p, remaining, " ~ %s %.0f %s", l10n(L10N_LBL_W_PRESSURE), press_display, pressUnit);
       if (written > 0 && (size_t)written < remaining) { p += written; remaining -= written; }
     }
-    if (config.store.weatherhumidity && remaining > 1) {
+    if (weatherDetail(config.store.weatherhumidity) && remaining > 1) {
       written = snprintf(p, remaining, " ~ %s %d%%", l10n(L10N_LBL_W_HUMIDITY), WeatherCache::humidity);
       if (written > 0 && (size_t)written < remaining) { p += written; remaining -= written; }
     }
-    if (config.store.weatherwind && remaining > 1) {
+    if (weatherDetail(config.store.weatherwind) && remaining > 1) {
       written = snprintf(p, remaining, " ~ %s %.1f %s [%s]", l10n(L10N_LBL_W_WIND), wind_display, windUnit, l10n_wind(wind_dir_idx));
       if (written > 0 && (size_t)written < remaining) { p += written; remaining -= (size_t)written; }
     }

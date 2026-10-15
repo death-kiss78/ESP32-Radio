@@ -19,6 +19,7 @@
 #include "netserver.h"
 #include "network.h"
 #include "player.h"
+#include "playlistvalidator.h"
 #include "startup.h"
 #include "telnet.h"
 #include "utility.h"
@@ -29,6 +30,7 @@
 #include "../displays/dspfont.h"
 #include "../displays/widgets/widgetsconfig.h" //BitrateFormat
 #include "../displays/themeregistry.h"         // the theme editor's API below
+#include "../displays/layoutregistry.h"        // the layout editor's API below
 #if USE_OTA
   #if ESP_ARDUINO_VERSION >= ESP_ARDUINO_VERSION_VAL(3, 0, 0)
     #include <NetworkUdp.h>
@@ -37,6 +39,14 @@
   #endif
   #include <ArduinoOTA.h>
 #endif
+
+static constexpr uint32_t SEARCHRESULTS_BUFFER        = 32;   // KB; chunk size for chunked HTTP transfers (radio-browser.info)
+static constexpr uint32_t SEARCHRESULTS_YIELDINTERVAL  = 0;    // with a large buffer, 0 all but eliminates skipping
+// #define MAX_PL_READ_BYTES 1024*64                             // optional chunked transfers for playlist.csv/wifi.csv
+static constexpr size_t   WEBSOCKET_BUFFER             = 512;  // websocket / JSON payload buffer
+static constexpr uint32_t NETSERVER_TASK_DELAY         = 1;    // ms; yield between netserver.loop() iterations
+static constexpr uint32_t NSQ_SEND_DELAY               = 300;  // ms; xQueueSend timeout for nsQueue (requestOnChange)
+static constexpr uint32_t NS_QUEUE_DELAY               = 0;    // xQueueReceive timeout for nsQueue (processQueue)
 #ifdef USE_SD
   #include "sdmanager.h"
   #include "filemanager.h"   // the /sdman page and the mode that gates the player
@@ -262,44 +272,6 @@ void handleReady(AsyncWebServerRequest *request) {
   request->send(response);
 }
 
-#ifdef SAVE_LOGS_TO_FS
-// /log.txt: the whole log ring as one text file, oldest file first.  The chunked loader hands the callback a running byte offset,
-// which is exactly what logRingReadAt() wants, so the layout is snapshotted once at the start of the request and the offsets stay stable
-// - anything logged while the client is downloading is beyond the snapshot and is simply not part of this response.
-static size_t logChunk(uint8_t* buffer, size_t maxLen, size_t index) {
-  return logRingReadAt(index, buffer, maxLen);
-}
-
-void handleLog(AsyncWebServerRequest *request) {
-  if (logRingServeBusy()) {
-    request->send(409, "text/plain", "a log download is already in progress\n");
-    return;
-  }
-  const size_t total = logRingSnapshot();
-  if (total == 0) {
-    request->send(200, "text/plain", "no log stored\n");
-    return;
-  }
-  AsyncWebServerResponse *response = request->beginChunkedResponse("text/plain", logChunk);
-  response->addHeader("Cache-Control", "no-store");
-  request->send(response);
-}
-
-// /logclear empties the ring (state file too)
-void handleLogClear(AsyncWebServerRequest *request) {
-  if (logRingServeBusy()) {   // the wipe would pull the files out from under that download
-    request->send(409, "text/plain", "a log download is in progress - wait for it to finish\n");
-    return;
-  }
-  const size_t had = logRingClear();   // wipes and reports the bytes, without snapshotting over anyone
-  char body[48];
-  snprintf(body, sizeof(body), "log cleared (%u bytes)\n", (unsigned)had);
-  AsyncWebServerResponse *response = request->beginResponse(200, "text/plain", body);
-  response->addHeader("Cache-Control", "no-store");   // a cached 200 would make a second clear look like a no-op
-  request->send(response);
-}
-#endif
-
 void handleSearchPost(AsyncWebServerRequest *request) {
   // handle preview or add to playlist
   bool addtoplaylist = false;
@@ -398,14 +370,6 @@ bool NetServer::begin(bool quiet) {
 
   webserver.on("/", HTTP_ANY, handleIndex);
   webserver.on("/ready", HTTP_GET, handleReady);
-  #ifdef SAVE_LOGS_TO_FS
-    // The saved log ring, oldest file first (logging.h). Both spellings: /log is the friendly one, /log.txt is what a
-    // curl or an old bookmark carries. This router matches an exact path or that path plus "/", so neither shadows the
-    // other and a bare /sdman route is impossible for the manager; /logclear is a different path, not /log plus "/".
-    webserver.on("/log", HTTP_GET, handleLog);
-    webserver.on("/log.txt", HTTP_GET, handleLog);
-    webserver.on("/logclear", HTTP_GET, handleLogClear);
-  #endif
   webserver.on("/locale.json", HTTP_GET, handleDynamicLocale);
   webserver.on("/wwwlocale.json", HTTP_GET, handleWWWLocaleIndex);
   webserver.on("/dsplocale.json", HTTP_GET, [](AsyncWebServerRequest *request) {
@@ -566,18 +530,18 @@ void NetServer::processQueue() {
                                                                 act += F("\"group_display\",");
             #if (I2S_BCLK!=255 || (VS1053_CS != 255 && VS_PATCH_ENABLE == true) || DBGWUI)
                                                                 act += F("\"group_vu_ss\",");
-              if (vuConf_ptr->textsize > 0 || DBGWUI)           act += F("\"group_vu\",");
+              if (presentOf(*vuConf_ptr) || DBGWUI)             act += F("\"group_vu\",");
                                                            else act += F("\"hide_group_vu\",");
               if (config.store.screensaverVU || DBGWUI)         act += F("\"group_vu_ss_style\",");
                                                            else act += F("\"hide_group_vu_ss_style\",");
             #endif
-            if (bufferbarConf_ptr->height > 0 || DBGWUI)        act += F("\"group_buffer\",");
+            if (presentOf(*bufferbarConf_ptr) || DBGWUI)        act += F("\"group_buffer\",");
                                                            else act += F("\"hide_group_buffer\",");
             if (BRIGHTNESS_PIN != 255 || DBGWUI)                act += F("\"group_brightness\",");
             if (DSP_DIMMING_ENABLED || DBGWUI)                  act += F("\"group_dimming\",");
-            #if defined(DSP_TFT)
-                                                                act += F("\"group_color\",");
-            #endif
+            if (config.theme.clockbg != config.theme.background || DBGWUI)
+                                                                act += F("\"group_clockglow\",");
+                                                           else act += F("\"hide_group_clockglow\",");
             if (display.getLayoutCount() > 1 || DBGWUI)         act += F("\"group_layout\",");
             #if defined(DSP_TFT) || DBGWUI
               if (display.getThemeCount() > 1|| DBGWUI)         act += F("\"group_theme\",");
@@ -586,7 +550,7 @@ void NetServer::processQueue() {
                                                            else act += F("\"hide_group_full_time\",");
             if (TS_MODEL != TS_MODEL_UNDEFINED || DBGWUI)       act += F("\"group_touch\",");
                                                                 act += F("\"group_locale\",");
-            if (weatherConf_ptr->buffsize > 0 || DBGWUI)        act += F("\"group_weather\",");
+            if (presentOf(*weatherConf_ptr) || DBGWUI)          act += F("\"group_weather\",");
                                                            else act += F("\"hide_group_weather\",");
                                                                 act += F("\"group_controls\",");
             if ((DSP_MODEL != DSP_DUMMY && (BTN_NEXT != 255 || BTN_PREV != 255)) || DBGWUI)
@@ -626,7 +590,7 @@ void NetServer::processQueue() {
                                   config.store.irtlp,
                                   VOLUME_SCALE);
                                   break;
-      case GETSCREEN:     snprintf(wsbuf, sizeof(wsbuf), "{\"flip\":%d,\"inv\":%d,\"nump\":%d,\"dspon\":%d,\"br\":%d,\"scre\":%d,\"scrb\":%d,\"scrt\":%d,\"scrpe\":%d,\"scrpb\":%d,\"scrpt\":%d,\"scrfull\":%d,\"scrtext\":%d,\"scrvu\":%d,\"scrstyle\":%d,\"scrpeak\":%d,\"bufbar\":%d,\"vu\":%d,\"vupeak\":%d,\"vustyle\":%d,\"dim\":%d,\"dimto\":%d,\"dimbr\":%d,\"volpg\":%d,\"clock12\":%d,\"invtitle\":%d,\"layoutId\":%d,\"themeId\":%d,\"systemFontId\":%d,\"clockFontId\":%d,\"clockglow\":%d}",
+      case GETSCREEN:     snprintf(wsbuf, sizeof(wsbuf), "{\"flip\":%d,\"inv\":%d,\"nump\":%d,\"dspon\":%d,\"br\":%d,\"scre\":%d,\"scrb\":%d,\"scrt\":%d,\"scrpe\":%d,\"scrpb\":%d,\"scrpt\":%d,\"scrfull\":%d,\"scrtext\":%d,\"scrvu\":%d,\"scrstyle\":%d,\"scrpeak\":%d,\"bufbar\":%d,\"vu\":%d,\"vupeak\":%d,\"vustyle\":%d,\"dim\":%d,\"dimto\":%d,\"dimbr\":%d,\"volpg\":%d,\"clock12\":%d,\"invtitle\":%d,\"layoutId\":%d,\"themeId\":%d,\"systemFontId\":%d,\"clockFontId\":%d,\"clockglow\":%d,\"plpaged\":%d,\"allcaps\":%d}",
                                   config.store.flipscreen,
                                   config.store.invertdisplay,
                                   config.store.numplaylist,
@@ -657,7 +621,9 @@ void NetServer::processQueue() {
                                   config.store.themeId,
                                   config.store.systemFontId,
                                   config.store.clockFontId,
-                                  config.store.clockglow);
+                                  config.store.clockglow,
+                                  config.store.playlistPages,
+                                  config.store.pretextALLCAPS);
                                   break;
       case GETLOCALE:     snprintf(wsbuf, sizeof(wsbuf), "{\"locale_webui\":\"%s\",\"locale_disp\":\"%s\",\"tz_name\":\"%s\",\"tzposix\":\"%s\",\"sntp1\":\"%s\",\"sntp2\":\"%s\",\"timeinterval\":%d}",
                                   config.store.locale_webui,
@@ -718,20 +684,20 @@ void NetServer::processQueue() {
       case BITRATE:       snprintf(wsbuf, sizeof(wsbuf), "{\"payload\":[{\"id\":\"bitrate\", \"value\": %d}, {\"id\":\"fmt\", \"value\": \"%s\"}]}", config.station.bitrate, getFormat(config.configFmt)); break;
       case GETBATTERY: {
         uint32_t battref = config.store.battery_adc_ref_mv ? config.store.battery_adc_ref_mv : (uint32_t)BATTERY_ADC_REF_MV;
-        #ifdef BATTERY_FORCE_DISPLAY
-          // The same fake the on-screen widget uses, so the WebUI battery row can be laid out with no battery fitted
-          int pct = BATTERY_FORCE_DISPLAY;
-          if (pct < 0) pct = 0;
-          if (pct > 100) pct = 100;
+        if (widgetsEditorForceOff) {
+          // The editor's force-off hides the battery on the panel, so the WebUI row agrees and reports none.
+          snprintf(wsbuf, sizeof(wsbuf), "{\"payload\":[{\"id\":\"battery\", \"value\": \"\"}, {\"id\":\"battref\", \"value\": %u}]}", battref);
+        } else if (widgetsEditorForceOn) {
+          // The same fake the on-screen widget shows, so the WebUI battery row can be laid out with no battery fitted
           uint32_t mvmin = (uint32_t)BATTERY_PRESENT_MIN_MV;
           uint32_t mvmax = (uint32_t)BATTERY_PRESENT_MAX_MV;
           if (mvmin < 2500) mvmin = 2500;
           if (mvmax > 5000) mvmax = 5000;
           if (mvmin >= mvmax) { mvmin = 3000; mvmax = 4200; }
           char valbuf[64];
-          snprintf(valbuf, sizeof(valbuf), "volt: %umV, percentage: %d%%", (unsigned)(mvmin + (uint32_t)pct * (mvmax - mvmin) / 100), pct);
+          snprintf(valbuf, sizeof(valbuf), "volt: %umV, percentage: %d%%", (unsigned)(mvmin + 50u * (mvmax - mvmin) / 100), 50);
           snprintf(wsbuf, sizeof(wsbuf), "{\"payload\":[{\"id\":\"battery\", \"value\": \"%s\"}, {\"id\":\"battref\", \"value\": %u}]}", valbuf, battref);
-        #else
+        } else {
           BatteryStatus bat = battery.getStatus();
           if (!bat.present && !battery.isInitialized()) {
             snprintf(wsbuf, sizeof(wsbuf), "{\"payload\":[{\"id\":\"battery\", \"value\": \"\"}, {\"id\":\"battref\", \"value\": %u}]}", battref);
@@ -740,7 +706,7 @@ void NetServer::processQueue() {
             snprintf(valbuf, sizeof(valbuf), "volt: %umV, percentage: %d%%", (unsigned)bat.voltage_mv, bat.percentage);
             snprintf(wsbuf, sizeof(wsbuf), "{\"payload\":[{\"id\":\"battery\", \"value\": \"%s\"}, {\"id\":\"battref\", \"value\": %u}]}", valbuf, battref);
           }
-        #endif
+        }
         break;
       }
       case MODE:          snprintf(wsbuf, sizeof(wsbuf), "{\"payload\":[{\"id\":\"playerwrap\", \"value\": \"%s\"}]}", player.status() == PLAYING ? "playing" : "stopped"); break;
@@ -775,6 +741,17 @@ void NetServer::processQueue() {
       case CURATED_PLAYLIST_DONE: snprintf(wsbuf, sizeof(wsbuf), "{\"curated_playlist_done\":true}"); break;
       case CURATED_FAILED: snprintf(wsbuf, sizeof(wsbuf), "{\"curated_failed\":true}"); break;
       case ARTWORK:       break;
+      // Playlist validator progress: start, one result per station, then done.  The fields are read live from
+      // the validator, which stages the newest message before queueing the event.
+      case PLVALIDATE: {
+        switch (playlistValidator.message()) {
+          case PLV_MSG_START: snprintf(wsbuf, sizeof(wsbuf), "{\"plvalidate\":{\"start\":1,\"count\":%u}}", (unsigned)playlistValidator.total()); break;
+          case PLV_MSG_ITEM:  snprintf(wsbuf, sizeof(wsbuf), "{\"plvalidate\":{\"i\":%u,\"r\":\"%s\"}}", (unsigned)playlistValidator.reportIndex(), playlistValidator.reportResult() == PLV_RESULT_PASS ? "pass" : "fail"); break;
+          case PLV_MSG_DONE:  snprintf(wsbuf, sizeof(wsbuf), "{\"plvalidate\":{\"done\":1}}"); break;
+          default: break;
+        }
+        break;
+      }
       #ifdef USE_SD
         case CHANGEMODE:    config.changeMode(config.newConfigMode); return; break;
       #endif
@@ -1623,6 +1600,70 @@ void startOnlineUpdate() {
   #endif //#ifdef UPDATEURL
 }
 
+// The panel this build drives, as a file-name suffix: _TFT480x320 or _OLED128x64
+static String dspSuffix() {
+  #if CONF_HAS_CONF_MACROS
+    char buf[24];
+    #ifdef DSP_TFT
+      snprintf(buf, sizeof(buf), "_TFT%ux%u", (unsigned)CONF_DSP_WIDTH, (unsigned)CONF_DSP_HEIGHT);
+    #else
+      snprintf(buf, sizeof(buf), "_OLED%ux%u", (unsigned)CONF_DSP_WIDTH, (unsigned)CONF_DSP_HEIGHT);
+    #endif
+    return String(buf);
+  #else
+    return String();
+  #endif
+}
+
+// A suggested file name, so the browser's save dialog arrives pre-filled.  Anything a path cannot carry
+// becomes an underscore, but UTF-8 bytes are kept, because the RFC 5987 form carries them properly for the
+// browsers that read it alongside the plain one; a name with nothing usable left keeps the fallback.  The
+// filename* value must NOT be quoted - a closing quote there is part of the value, and browsers turn the
+// illegal character into an underscore, which is how a download once arrived as ".json_".
+static String attachmentName(const char* prefix, const char* name, const char* fallback) {
+  String stem;
+  for (const char* p = name; p != nullptr && *p != '\0'; p++) {
+    const char c = *p;
+    // A space is deliberately NOT plain here, so it becomes an underscore: an exported name can then be typed,
+    // quoted or pasted into a tool without escaping.  The layout's own stored name keeps its spaces.
+    const bool plain = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
+                       c == '-' || c == '_' || c == '.';
+    stem += (plain || (uint8_t)c >= 0x80) ? c : '_';
+  }
+  stem.trim();
+
+  String out;
+  if (stem.length() == 0) {
+    String fb = fallback;                            // the panel suffix belongs on this one too
+    if (fb.endsWith(".json")) fb = fb.substring(0, fb.length() - 5);
+    out = "attachment; filename=\"";
+    out += fb;
+    out += dspSuffix();
+    out += ".json\"";
+    return out;
+  }
+  stem += dspSuffix();
+  out = "attachment; filename=\"";
+  out += prefix;
+  out += stem;
+  out += ".json\"; filename*=UTF-8''";
+  out += prefix;
+  for (size_t i = 0; i < stem.length(); i++) {
+    const uint8_t b = (uint8_t)stem[i];
+    const bool plain = (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9') ||
+                       b == '-' || b == '_' || b == '.';
+    if (plain) {
+      out += (char)b;
+    } else {
+      char esc[5];
+      snprintf(esc, sizeof(esc), "%%%02X", b);
+      out += esc;
+    }
+  }
+  out += ".json";
+  return out;
+}
+
 void handleNotFound(AsyncWebServerRequest * request) {
   #if defined(HTTP_USER) && defined(HTTP_PASS)
     if (network.status == CONNECTED)
@@ -1741,11 +1782,7 @@ void handleNotFound(AsyncWebServerRequest * request) {
       (netserver.newVersionAvailable) ? "true" : "false",
       escapedGithubUrl,
       config.store.locale_webui,
-      #ifdef WWW_CASETRANSFORM
-        "true"
-      #else
-        "false"
-      #endif
+      editorOpt(config.store.pretextALLCAPS) ? "true" : "false"
    );
     AsyncWebServerResponse *response = request->beginResponse(200, "application/javascript", varjsbuf);
     response->addHeader("Cache-Control", "no-cache, no-store, must-revalidate");
@@ -1811,6 +1848,44 @@ void handleNotFound(AsyncWebServerRequest * request) {
     response->addHeader("Cache-Control", "no-cache, no-store, must-revalidate");
     response->addHeader("Pragma", "no-cache");
     response->addHeader("Expires", "0");
+    request->send(response);
+    return;
+  }
+  if (request->url() == "/conf.js") {
+    // The editor's build constants and feature flags, in the shape /variables.js already uses.  The page
+    // labels a number with the conf file's own macro from these and validates against the panel size, so
+    // nothing symbolic ever has to be stored in a layout file.  editorThemes follows the theme routes'
+    // guard exactly; editorLayouts is false in a build with no display, where there is no registry.
+    char confjsbuf[320];
+    snprintf(confjsbuf, sizeof(confjsbuf),
+      "var editorThemes=%s;\n"
+      "var editorLayouts=%s;\n"
+      "var dspFamily='%s';\n"
+      "var confDsp={width:%d,height:%d,framewdt:%d,maxWidth:%d,scrollDelay:%d,scrollTime:%d,bootLogoTap:%d,hasConfMacros:%d,vuMaxWidth:%d,vuMaxHeight:%d};\n",
+      #if defined(DSP_TFT) || DBGWUI
+        "true",
+      #else
+        "false",
+      #endif
+      #ifndef DUMMYDISPLAY
+        "true",
+      #else
+        "false",
+      #endif
+      // The panel family, for the page's "Display type" line and for the exported file names.  An empty string in a
+      // build with no display, which is also the build where the layout half is hidden.
+      #ifdef DSP_TFT
+        "TFT",
+      #elif defined(DSP_OLED)
+        "OLED",
+      #else
+        "",
+      #endif
+      CONF_DSP_WIDTH, CONF_DSP_HEIGHT, CONF_FRAMEWDT, CONF_MAX_WIDTH,
+      CONF_SCROLLDELAY, CONF_SCROLLTIME, CONF_BOOTLOGOTOP, CONF_HAS_CONF_MACROS,
+      CONF_VU_MAX_WIDTH, CONF_VU_MAX_HEIGHT);
+    AsyncWebServerResponse *response = request->beginResponse(200, "application/javascript", confjsbuf);
+    response->addHeader("Cache-Control", "no-cache, no-store, must-revalidate");
     request->send(response);
     return;
   }
@@ -1958,7 +2033,7 @@ void handleNotFound(AsyncWebServerRequest * request) {
     String json;
     themeJsonForAllSlots(json);
     AsyncWebServerResponse *response = request->beginResponse(200, "application/json", json);
-    response->addHeader("Content-Disposition", "attachment; filename=\"ehRadioThemes-Backup.json\"");
+    response->addHeader("Content-Disposition", String("attachment; filename=\"ehRadioThemes-Backup") + dspSuffix() + ".json\"");
     response->addHeader("Cache-Control", "no-cache");
     request->send(response);
     return;
@@ -2045,6 +2120,256 @@ void handleNotFound(AsyncWebServerRequest * request) {
     }
     display.putRequest(THEMEPREVIEW);
     request->send(200, "text/plain", "OK");
+    return;
+  }
+  #endif
+
+  // ---------------------------------------------------------------------------
+  // The layout editor.  The same shape as the theme editor above and the same rules - one JSON field
+  // carries the document, the handler stages it and the display task applies it, and nothing here writes
+  // a file - but unlike the theme half it is offered on every panel that has a registry, because a layout
+  // is a set of pixel positions rather than a palette, so an OLED uses it too.
+  // ---------------------------------------------------------------------------
+  #ifndef DUMMYDISPLAY
+  if (request->url() == "/layout-elements.json") {
+    // The groups and the field table, straight off conf_index.h: each field's type, its flags and its own
+    // cells, so the page draws one card per field and cannot mispair a cell with its key.
+    String json = "{\"groups\":[";
+    for (uint8_t g = 0; g < CONF_GROUP_COUNT; g++) {
+      if (g > 0) json += ',';
+      json += '"';
+      json += _confGroups[g];
+      json += '"';
+    }
+    json += "],\"fields\":[";
+    for (uint8_t f = 0; f < CONF_FIELD_COUNT; f++) {
+      if (f > 0) json += ',';
+      json += "{\"key\":\"";
+      json += _confFields[f].key;
+      json += "\",\"label\":\"";
+      json += _confFields[f].label;
+      json += "\",\"type\":";
+      json += _confFields[f].type;
+      json += ",\"group\":";
+      json += _confFields[f].group;
+      json += ",\"flags\":";
+      json += _confFields[f].flags;
+      // A bit per cell index: the page labels those cells "unused" and greys them.  The conf still writes
+      // them, because the struct has them - see CONF_CELL_BIT in conf_index.h.
+      json += ",\"unused\":";
+      json += _confFields[f].unused;
+      json += ",\"cells\":[";
+      const uint8_t cells = _confCellCounts[_confFields[f].type];
+      for (uint8_t c = 0; c < cells; c++) {
+        if (c > 0) json += ',';
+        json += "{\"key\":\"";
+        json += _confCells[_confFields[f].type][c].key;
+        json += "\",\"label\":\"";
+        json += _confCells[_confFields[f].type][c].label;
+        json += "\",\"kind\":";
+        json += _confCells[_confFields[f].type][c].kind;
+        json += '}';
+      }
+      json += "]}";
+    }
+    json += "]}";
+    AsyncWebServerResponse *response = request->beginResponse(200, "application/json", json);
+    response->addHeader("Cache-Control", "no-cache");
+    request->send(response);
+    return;
+  }
+  if (request->url() == "/layoutall.json") {
+    // Every id, filled or not: the source list shows what each slot holds and the target list shows what a
+    // save would overwrite, so an empty slot is an empty string and the page decorates it.
+    String json = "{";
+    for (uint8_t i = 0; i < layoutCount(); i++) {
+      if (i > 0) json += ',';
+      json += '"' + String(i) + "\":\"";
+      if (layoutFilled(i)) json += layoutName(i);
+      json += '"';
+    }
+    json += '}';
+    AsyncWebServerResponse *response = request->beginResponse(200, "application/json", json);
+    response->addHeader("Cache-Control", "no-cache");
+    request->send(response);
+    return;
+  }
+  if (request->url() == "/layoutactive.json") {
+    // The layout the device is using, so the page opens on it rather than on the first built-in, plus the
+    // editor's two switches, which are runtime-only and have to come back with the layout or the boxes would lie.
+    String json = "{\"id\":";
+    json += config.store.layoutId;
+    json += ",\"widgetsOn\":";
+    json += widgetsEditorForceOn ? 1 : 0;
+    json += ",\"widgetsOff\":";
+    json += widgetsEditorForceOff ? 1 : 0;
+    json += '}';
+    AsyncWebServerResponse *response = request->beginResponse(200, "application/json", json);
+    response->addHeader("Cache-Control", "no-cache");
+    request->send(response);
+    return;
+  }
+  if (request->url() == "/layoutdata.json") {
+    const int id = request->hasArg("id") ? request->arg("id").toInt() : -1;
+    if (id < 0 || id >= (int)layoutCount() || !layoutFilled((uint8_t)id)) {
+      request->send(404, "text/plain", "No such layout");
+      return;
+    }
+    String json;
+    layoutDocFor(layoutSource((uint8_t)id), layoutName((uint8_t)id), json);
+    AsyncWebServerResponse *response = request->beginResponse(200, "application/json", json);
+    response->addHeader("Cache-Control", "no-cache");
+    request->send(response);
+    return;
+  }
+  if (request->method() == HTTP_POST && request->url() == "/layoutapply") {
+    const AsyncWebParameter *dataArg = request->getParam("data", true);
+    if (dataArg == nullptr) {
+      request->send(400, "text/plain", "data is required");
+      return;
+    }
+    // The body lands in the staging layout and the display task takes it from there; this task never touches
+    // the live layout, and nothing is written to a file or to NVS.  A layout for a different panel and one
+    // that has lost its station or playlist line are refused here as well as on the page: the first would
+    // draw nonsense and the second is the one way this feature could break the device's own screens.
+    bool screenOk = false;
+    if (!layoutParseDoc(dataArg->value().c_str(), layoutStaging(), nullptr, 0, &screenOk)) {
+      request->send(400, "text/plain", "Bad layout JSON");
+      return;
+    }
+    if (!screenOk) {
+      request->send(400, "text/plain", "That layout is for another screen");
+      return;
+    }
+    if (!layoutRequiredOk(layoutStaging())) {
+      request->send(400, "text/plain", "A layout must keep its station and playlist lines");
+      return;
+    }
+    display.putRequest(LAYOUTPREVIEW);
+    request->send(200, "text/plain", "OK");
+    return;
+  }
+  if (request->method() == HTTP_POST && request->url() == "/editorwidgets") {
+    // The two switches that let the editor lay out widgets whose hardware is absent, whose style is off, or which
+    // the user's own options would otherwise show.  They live in RAM on purpose - a reboot has to hand the device
+    // back as the user left it - and the display task has to re-init for a gate it cannot see to move, hence
+    // APPLYSTATE.  `mode` is on, off, or neither (both cleared), so the pair can never be set together here.
+    const String mode = request->hasArg("mode") ? request->arg("mode") : String();
+    widgetsEditorForceOn  = (mode == "on");
+    widgetsEditorForceOff = (mode == "off");
+    // The weather is the one thing force-on has to ASK for rather than merely reveal: a layout can only be
+    // positioned against a real line, so turning it on fetches now instead of waiting for the next sync
+    // interval, and turning it off rebuilds the string without the four fields the editor pretended were on.
+    if (widgetsEditorForceOn) network.forceWeather = true;
+    network.buildWeatherString();
+    display.putRequest(APPLYSTATE);
+    request->send(200, "text/plain", mode == "on" ? "on" : (mode == "off" ? "off" : "none"));
+    return;
+  }
+  if (request->url() == "/xlayout.json") {
+    // Export one slot as a download, taken from the device, so the file is exactly what a save would write and
+    // can go back the same way: Save IS the import, because it parses whatever this produced.  The slot files
+    // are the only copy of a custom layout, so a filesystem reflash loses them unless they came out first.
+    const int slot = request->hasArg("slot") ? request->arg("slot").toInt() : -1;
+    if (slot < 0 || slot >= LAYOUT_SLOT_COUNT) {
+      request->send(400, "text/plain", "Bad slot");
+      return;
+    }
+    const uint8_t id = (uint8_t)(layoutCount() - LAYOUT_SLOT_COUNT + slot);
+    if (!layoutFilled(id)) {
+      request->send(404, "text/plain", "That slot is empty");
+      return;
+    }
+    String json;
+    layoutDocFor(layoutSource(id), layoutName(id), json);
+    AsyncWebServerResponse *response = request->beginResponse(200, "application/json", json);
+    response->addHeader("Content-Disposition", attachmentName("ehRadioLayout-", layoutName(id), layoutSlotFileName((uint8_t)slot)));
+    response->addHeader("Cache-Control", "no-cache");
+    request->send(response);
+    return;
+  }
+  if (request->url() == "/xlayoutall.json") {
+    // Every filled slot in one download: one layout is that layout's own document, so a single-layout device
+    // gets the identical file from either export button, and more than one is an array in slot order.
+    String json;
+    layoutDocForAllSlots(json);
+    AsyncWebServerResponse *response = request->beginResponse(200, "application/json", json);
+    response->addHeader("Content-Disposition", String("attachment; filename=\"ehRadioLayouts-Backup") + dspSuffix() + ".json\"");
+    response->addHeader("Cache-Control", "no-cache");
+    request->send(response);
+    return;
+  }
+  if (request->method() == HTTP_POST && request->url() == "/xlayout") {
+    const AsyncWebParameter *actionArg = request->getParam("action", true);
+    const AsyncWebParameter *slotArg = request->getParam("slot", true);
+    if (actionArg == nullptr || slotArg == nullptr) {
+      request->send(400, "text/plain", "action and slot are required");
+      return;
+    }
+    const int slot = slotArg->value().toInt();
+    if (slot < 0 || slot >= LAYOUT_SLOT_COUNT) {
+      request->send(400, "text/plain", "Bad slot");
+      return;
+    }
+    const uint8_t id = (uint8_t)(layoutCount() - LAYOUT_SLOT_COUNT + slot);
+
+    if (actionArg->value() == "delete") {
+      layoutDeleteSlot((uint8_t)slot);
+      if (config.store.layoutId == id) {
+        // The layout the device is using has just stopped existing, so the choice falls back to the factory
+        // layout and is persisted: a stored id with nothing behind it cannot be left behind.  This is the one
+        // place the layout editor writes NVS, and applyLayout() repaints through the ordinary layout path
+        // because a delete is a real change rather than a preview.
+        config.store.layoutId = 0;
+        config.saveValue(&config.store.layoutId, (uint8_t)0);
+        display.applyLayout(0);
+      }
+      request->send(200, "text/plain", "OK");
+      return;
+    }
+    if (actionArg->value() == "save") {
+      const AsyncWebParameter *dataArg = request->getParam("data", true);
+      if (dataArg == nullptr) {
+        request->send(400, "text/plain", "data is required");
+        return;
+      }
+      LayoutData parsed;
+      char name[33];
+      name[0] = '\0';
+      bool screenOk = false;
+      if (!layoutParseDoc(dataArg->value().c_str(), &parsed, name, sizeof(name), &screenOk)) {
+        request->send(400, "text/plain", "Bad layout JSON");
+        return;
+      }
+      // The same two refusals as the preview, and for the same reasons: one is a file made for another panel,
+      // and the other is the one way this feature could break the device's own screens.  A widget merely off
+      // the panel edge is NOT refused - only the page can judge whether that was deliberate, and it warns.
+      if (!screenOk) {
+        request->send(400, "text/plain", "That layout is for another screen");
+        return;
+      }
+      if (!layoutRequiredOk(&parsed)) {
+        request->send(400, "text/plain", "A layout must keep its station and playlist lines");
+        return;
+      }
+      if (!layoutSaveSlot((uint8_t)slot, name, &parsed)) {
+        request->send(500, "text/plain", "Write failed");
+        return;
+      }
+      // Save writes the slot AND makes it the layout in use, which is what makes the panel show it and
+      // options.html agree.  `use=0` is for a bulk restore, which installs layouts without the device leaving
+      // whatever it was already showing.
+      const bool useIt = request->hasParam("use", true)
+                           ? request->getParam("use", true)->value().toInt() != 0
+                           : true;
+      if (useIt) {
+        config.saveValue(&config.store.layoutId, id);
+        display.applyLayout(id);
+      }
+      request->send(200, "text/plain", "OK");
+      return;
+    }
+    request->send(400, "text/plain", "Bad action");
     return;
   }
   #endif

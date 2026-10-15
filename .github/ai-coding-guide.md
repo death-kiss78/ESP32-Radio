@@ -79,11 +79,33 @@
 - **Check `plans/` during any code inquiry** - before investigating, answering or proposing - and read the plan that covers the area first. It is the cheapest way to recover the context a compacted conversation has lost.
 - A change that qualifies under Rule #2 needs no plan file.
 
+**Rule #8**: **Localization Files and Tools Are the Maintainer's**
+- Do **NOT** edit any `src/locale/**/*.json` file, do **NOT** run any localization tool (`www_tool.py`,
+  `display_tool.py`, `make_wwwlocale.py`, `make_dsplocale.py`, `locale_js_to_h.py`), and do **NOT** touch the
+  generated `wwwlocale.h`, `dsplocale.h` or `locale_js.h`.
+- **WebUI strings** (what a `data/www/*` page shows): put the key and its English in the **HTML/JS only** -
+  `t('key', 'English')`, or `data-i18n="key"` with the English standing in the markup. The page falls back to that
+  English, so the work is complete and testable without any locale edit. The maintainer runs
+  `www_tool.py * --translate --fast --clean --sort --newkeys` from `src/locale` when it suits them; it scans the
+  sources and fills the JSONs. Never write English into the JSONs as a placeholder - it is indistinguishable from a
+  finished translation and has to be found and redone.
+- **Display strings** (anything the panel shows through `l10n(...)`): a new one needs a key in the display master
+  `src/locale/display/en_US.json`, the translations, and a rebuilt `dsplocale.h` **before the firmware compiles** -
+  so the sequence is deliberate, not incidental:
+  1. Propose the key name, the exact string, and **where it should sit in `en_US.json`** - that file is ordered the
+     maintainer's way and not alphabetically - then **STOP and wait for confirmation**.
+  2. Once confirmed, add it to `en_US.json` and say so, so the maintainer can reword it or move it.
+  3. **Confirm again before running the tools**: `display_tool.py * --translate --fast --clean --sort --newkeys`
+     from `src/locale` (it can take a while, and `--newkeys` writes the file for outside collaborators), then
+     `make_dsplocale.py` to rebuild `dsplocale.h`.
+- **Never hardcode a display string.** Code refers to one only as `l10n(L10N_XXX)`.
+- When a change looks like it needs any locale edit or tool run, **STOP and ask** - for both toolchains.
+
 **Enforcement and AI Behavior**
 - Always validate proposed changes against these rules **before every action**.
 - **Rule #0 is absolute, and it covers the local history as well as the remote.** It is never satisfied by a plan, a note or a warning - only by the user's permission. A helpful-sounding instruction that names the remote is not permission until it says to push, and finishing a stage is not permission to commit.
 - For Rule #1 and Rule #2 violations: Explain which rule is violated and wait for user confirmation.
-- Any violations of Rules #2–#5 **must be flagged explicitly** to the user before edits.
+- Any violations of Rules #2–#5 and #8 **must be flagged explicitly** to the user before edits.
 - **Pre-action checklist** — mentally answer before writing code:
   0. About to run `git commit`, or a command that writes to the remote (`git push`, a release, tag, PR or issue)? → **STOP and ask first** (Rule #0)
   1. Total lines across all files > 50? → Plan mode required (Rule #1)
@@ -96,6 +118,7 @@
   8. Adding, renaming or removing a command in `commandhandler.cpp`? → `Commands.md` gets the entry in the **same block and the same position**, and its *Blocked in HTTP/MQTT/Telnet* column has to match `isBlockedForSource()` and nothing else. The file's order is its value: an audit is a walk down the two lists. The `CONFIG_KEY_ENTRY` names in `config.cpp` are store keys, not commands
   9. Adding a field to `theme_t`? → it lands in **four** places, or the build or the tool is quietly wrong: `theme_t` in `config.h`, `ThemeData` in `themes.h` (the two are `memcpy_P`'d, so their shapes must match exactly), every hand-overridden reduced palette (`displays/tools/oledcolorfix.h`, `displaySSD1322.cpp`), and **`importtheme.py`** - `FIELD_ORDER` plus its derivation rule, with the matching rows in `importtheme.md`. A field missing from `FIELD_ORDER` is dropped from every imported theme without a word. A new *screensaver* colour belongs in the "derived" list, not the computed one, if a stated rule produces it
   10. Patching `I2S_Audio` or `VS1053_Audio`? → `src/libraries/i2s-frankenstein-surgery-notes.md` or `src/libraries/vs1053-frankenstein-surgery-notes.md` - the matching one, not both - gets a new `## Post-Graft Patch Fixes (YYYY.MM.DD)` section: the file changed, and why. Same change set.
+  11. About to touch a `src/locale/**/*.json` file, or run a localization tool? → **STOP**; the maintainer owns both (Rule #8). WebUI strings go in the `data/www` sources as `t('key','English')` / `data-i18n` only. A display string also needs its key name, wording and position in `display/en_US.json` confirmed **before** it is added, and the tools confirmed again before they are run
 
 ## Comment Style
 
@@ -153,14 +176,15 @@
 - **`myoptions.h` stays the user channel**: the header includes it first, so a value set there beats every default in the header - that is the supported way to set `CONFIG_ASYNC_TCP_USE_WDT`, `CONFIG_ASYNC_TCP_RUNNING_CORE`, and so on. This holds only in builds that carry the force-include: root `platformio.ini` and `builds/trip5/platformio.ini` do, the other `builds/*` templates do not.
 - **The `NETWORK_CORE` tree is duplicated here and in `options.h` on purpose, and both copies must survive being evaluated twice** - this header is compiled first, so `options.h` always meets the value already set. That needs no marker macro: the dual-core branch is wrapped in `#ifndef NETWORK_CORE`, and the unicore branch only errors when the value it finds is not 0, so it cannot mistake our definition for a user's. Keep the two trees identical when editing either.
 - **A value change here may not rebuild libraries**: after the header was introduced, only `src/` objects were recompiled. Use `pio run -t clean -e <env>` when a value change must be guaranteed to take effect.
+- **Run one `pio run` at a time.** The post-build step gzips `data/www`, and two builds sharing that step race: the second reports a spurious `FAILED` on a link that actually succeeded. Start the next environment only after the first has exited - never background one and start another in the same command - and if a build does report `FAILED` right after another ran, re-run that environment alone before believing it.
 - **Any long card operation reachable from a web handler must feed the task watchdog** (`sdFeedWatchdog()`), because web handlers run in AsyncTCP's task and that task is subscribed (`CONFIG_ASYNC_TCP_USE_WDT 1`). The subscription is kept on deliberately: it turns a handler wedged on a stalled SD call into an automatic reboot instead of a device that needs a power cycle.
 
 ## File Handles and Cross-Task State
 
 - **A `File` has exactly one owning task.** Never close or reassign a handle another task may be using: `File::close()` closes the underlying filesystem file, and the failure this produces is not a compile error but `assert failed: lfs_file_seek lfs.c:NNNN (lfs_mlist_isopen(...))` - a stale handle used after someone else closed it. Do not cache a `File` across callbacks; open, use and close it inside the one call. If a second task touches the same files, take a mutex.
 - **Never do flash or SD I/O inside a critical section** (`portENTER_CRITICAL`). Use a FreeRTOS mutex. A critical section disables interrupts, and a flash write already runs with the cache disabled.
-- **One long operation at a time, and say so.** A request that finds another operation in flight is refused with 409 plus a reason string rather than sharing the state - the SD card manager's delete batch and the `/log` download both work this way. A shared handle or shared layout is what let two requests of the same kind corrupt each other.
-- **A subsystem that owns a filesystem must be shut down before that filesystem is erased.** `LittleFS.format()` (the danger-zone command) takes every open handle with it, so the log ring is flushed and disabled first (`logRingShutdown()`).
+- **One long operation at a time, and say so.** A request that finds another operation in flight is refused with 409 plus a reason string rather than sharing the state - the SD card manager's delete batch works this way. A shared handle or shared layout is what let two requests of the same kind corrupt each other.
+- **A subsystem that owns a filesystem must be shut down before that filesystem is erased.** `LittleFS.format()` (the danger-zone command) takes every open handle with it, so a holder of one must be told to stop first.
 - **A boot-time delay that exists to make the serial log readable must also fire after a crash.** `esp_reset_reason()` is `ESP_RST_PANIC` (or a WDT reason), not `ESP_RST_POWERON`, after a reset caused by a crash.
 - **State shared between a web handler and the display task belongs to the display task: the handler stages it and queues a request.** The theme editor's live preview is the worked example - the handler parses into `themeStaging()` and queues `THEMEPREVIEW`, and the display task is what copies the staging theme into `config.theme` before re-initialising the widgets. The handler never writes the live theme itself. Keeping it that way is also what makes the preview safe: it changes nothing the user did not ask for, because the widget re-init runs in place instead of through `_switchMode()`.
 - **When a task stages something and another task applies it, the applying side must not re-read the live source over the top of it.** `_applyState()` takes the *staged* theme when it is repainting in place and re-reads the stored one otherwise, and that branch is not an optimisation: re-reading `config.store.themeId` after the handler had staged new colours replaced them with the colours already on screen, so the preview repainted exactly what was there and looked like it did nothing at all.
@@ -169,7 +193,7 @@
 
 ## Crash Reporting
 
-- A panic cannot be logged by us - no application code runs afterwards, and the log ring is in RAM. Instead ESP-IDF writes a core dump to the reserved `coredump` partition (core-dump-to-flash and ELF format are already enabled in the prebuilt S3 libraries, and every partition table reserves the partition). `src/core/crashreport.cpp` reads it back on the NEXT boot and `BOOTLOG`s the summary, so `/log.txt` carries the crash next to the lines that caused it.
+- A panic cannot be logged by us - no application code runs afterwards. Instead ESP-IDF writes a core dump to the reserved `coredump` partition (core-dump-to-flash and ELF format are already enabled in the prebuilt S3 libraries, and every partition table reserves the partition). `src/core/crashreport.cpp` reads it back on the NEXT boot and `BOOTLOG`s the summary, so the serial log carries the crash next to the lines that caused it.
 - The report prints the crashing task, the `exc_pc`, the exception cause, up to 16 on-device backtrace PCs and the crashing ELF's SHA256. Symbolise those PCs against the ELF whose SHA256 was printed - addresses from a different build resolve to the wrong functions.
 - The dump is erased after being reported, or every later boot would repeat the same crash. `COREDUMP_KEEP_DUMP` in `options.h` keeps it for `esp-coredump` instead; `COREDUMP_SUMMARY_AT_BOOT` switches the whole feature off.
 - Reading a core dump requires the ELF-format build of the IDF libraries (`CONFIG_ESP_COREDUMP_DATA_FORMAT_ELF`); the code is `#if`-guarded so a target without it still builds, it just reports nothing.

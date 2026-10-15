@@ -11,7 +11,7 @@
 ehRadio runs on an ESP32-S3 to play Internet radio streams.
 
 A radio may be built using an ESP32-S3, an audio decoder, a display, and some inputs.
-ESP32 or ESP32-C3 boards are possible but may require special work.
+ESP32-WROOM boards are possible but are untested. PSRAM is required so WROVER boards are not supported.
 In some cases, like for the ES3C28P, no peripherals are even needed.
 
 To develop, I prefer [VS Code](https://code.visualstudio.com/) but you may try other IDEs.
@@ -66,8 +66,8 @@ ehRadio inherits a lot from ёRadio, but improvements have been made to make it 
 
 - Development is primarily focused on ESP32-S3
   - 8MB flash recommended (4MB possible but will break features)
-  - ESP-WROVER with PSRAM probably supported but untested
-  - ESP32-C3 possible but untested
+  - PSRAM is required - a board without it will not build
+  - ESP-WROVER with PSRAM likely supported but untested
 
 - Multiple decoders supported
   - I2S DAC Modules are recommended and well-supported
@@ -358,7 +358,7 @@ For that and other major needed changes to the codebase, there is a `code-issues
 
 | Date       | Release Notes    |
 | ---------- | ---------------- |
-| 2026.10.09 `dev` | ***Breaking changes*** LittleFS (not SPIFFS), SD File Manager (and fixes to SD Mode), both screen fonts changeable while running, SDMMC, Boot speed improved, major work on layouts and VU (all displays & changeable while running), screensaver VU & info text, fixes to: SSD1322 & SSD1327 (thanks kle7rx!), `ROTATE_90` for square displays, WebUI, IR code overhauled (mute/power added), recover from network stack crashes, Wi-fi and stream reconnects improved, library change: `elims/PsychicMqttClient` & MQTT/HA improved, LCD displays removed, NV3007 added (work in progress) |
+| 2026.10.14 `dev` | ***Breaking changes*** LittleFS (not SPIFFS), SD File Manager (and fixes to SD Mode), Playlist Validator, both screen fonts changeable while running, SDMMC, Boot speed improved, major work on layouts and VU (all displays & changeable while running, theme/layout editor added), screensaver VU & info text, fixes to: SSD1322 & SSD1327 (thanks kle7rx!), `ROTATE_90` for square displays, WebUI, IR code overhauled (mute/power added), recovery from network stack crashes and Wi-fi and stream reconnects, library change: `elims/PsychicMqttClient` & MQTT/HA improved, LCD displays removed, NV3007 added (work in progress) |
 | 2026.08.19 | Stability and bug fixes (SD Offline), documentation |
 | 2026.08.13 | Memory usage, stability, and bug fixes (especially to SD, VS1053) |
 | 2026.08.03 | Minor fixes (and whoops) fixed Search and Curated |
@@ -398,8 +398,8 @@ A full history of ёRadio from v0.4.177 to v0.9.533 can be seen in the [old Read
 ### Credit
 
 Thanks to:
-  - [death-kiss78](https://github.com/death-kiss78) - `ro_RO` & `it_IT` translations, SDMMC testing, initiated SD File Manager, inspired screensaver info text
-  - [kle7rx](https://github.com/kle7rx) - `ru_RU` translation, debugging, mute feature, VS1053/I2S fixing, amplifier schematics, SSD1327 fixes, SD1322 fixes, NV3007 support, OLED128x64 Minimal & Compact layouts, OLED256x64 Default layout.
+  - [death-kiss78](https://github.com/death-kiss78) - `ro_RO` & `it_IT` translations, SDMMC testing, initiated SD File Manager, inspired screensaver info text, sleep command fixes
+  - [kle7rx](https://github.com/kle7rx) - `ru_RU` translation, debugging, mute functionality, VS1053/I2S fixing, amplifier schematics, SSD1327 fixes, SD1322 fixes, NV3007 support, OLED128x64 Minimal & Compact layouts, Default layouts for OLED256x64 & TFT428x142
   - [Kasperaitis](https://github.com/kasperaitis) - `lt_LT` translation, initiating locales, battery support and widget, and a bunch of work for ES3C28P (including ES8311 decoder, FT6336 touchscreen)
   - [e2002](https://github.com/e2002) - for [ёRadio](https://github.com/e2002/yoradio/) without which ehRadio would not be possible
 

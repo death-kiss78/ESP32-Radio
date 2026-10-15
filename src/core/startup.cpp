@@ -14,6 +14,7 @@
 #include "utility.h"
 #include "../locale/dsplocale.h"
 #include "../displays/themeregistry.h"
+#include "../displays/layoutregistry.h"
 #ifdef USE_SD
   #include "filemanager.h" // the SD manager parks the startup services the way SD playback does
 #endif
@@ -280,6 +281,17 @@ void Startup::checkLittleFSandVer() {
   // custom id at all, so persisting from there would forget a perfectly good custom theme on every boot.
   if (config.store.themeId != themeIdWanted) config.saveValue(&config.store.themeId, config.store.themeId);
 
+  // The custom layout slots are optional files too, and they follow the same two-phase rule: loadLayout()
+  // already ran before the filesystem was mounted, so the id is re-resolved now that the slots are known and
+  // the correction is persisted when it differs, for the reason just given.  A build with no display has no
+  // registry and no slot files at all, so there is nothing to load and nothing to correct.
+  #ifndef DUMMYDISPLAY
+    layoutLoadSlots();
+    const uint8_t layoutIdWanted = config.store.layoutId;
+    config.loadLayout();
+    if (config.store.layoutId != layoutIdWanted) config.saveValue(&config.store.layoutId, config.store.layoutId);
+  #endif
+
   if (!config.wwwFilesExist) {
     utility.deleteMainwwwFile();
     #ifndef UPDATEURL
@@ -289,12 +301,6 @@ void Startup::checkLittleFSandVer() {
     #endif
   }
   LITTLEFSTIMELOG("Cleanup and write branches");
-
-  // The file log ring starts here: after the mount, after the write-read health check and after the pruning,
-  // because anything earlier would race the format-on-failure path.  Nothing is lost by the late start -
-  // logRingWrite() buffered boot lines into the RAM ring and the boot banner written here marks the boundary.
-  logRingInit();
-  LITTLEFSTIMELOG("logRingInit");
 }
 
 void Startup::initNetwork() {

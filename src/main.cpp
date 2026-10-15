@@ -26,6 +26,9 @@
 
 SET_LOOP_TASK_STACK_SIZE(LOOP_TASK_STACK_SIZE * 1024);
 
+// ms an iteration of loop() may take before it reports which stage blocked (moved out of options.h).
+static constexpr uint32_t MAIN_LOOP_STALL_MS = 500;
+
 size_t psramFrameBufferBytes = 0;   // set by subsystems, read by Core Monitor
 
 #ifdef CORE_MONITOR
@@ -52,7 +55,7 @@ void setup() {
       delay(1000);
       BOOTLOG("1 second delay after cold boot to ensure serial logs are available (CORE_DEBUG_LEVEL > 0 or ALL_DEBUG_LOGS)...");
     }
-    if (dumpedCrash) crashDumpReport();   // the previous boot's crash: serial log and log ring both get it
+    if (dumpedCrash) crashDumpReport();   // the previous boot's crash, reported into this boot's serial log
   #endif
   #if defined(ARDUINO_USB_CDC_ON_BOOT) && ARDUINO_USB_CDC_ON_BOOT
     Serial.setTxTimeoutMs(BOOTLOG_TX_TIMEOUT_MS);
@@ -200,8 +203,6 @@ void loop() {
           (unsigned long)(staged[4] / 1000UL));
     }
 }
-
-logRingFlush(); // drain log ring
 
 #ifdef CORE_MONITOR
     cmMainCount++;

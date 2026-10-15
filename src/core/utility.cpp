@@ -6,11 +6,7 @@
 #include <ctype.h>
 #include <cstdlib>
 #include <cstring>
-
-#ifndef ARDUINO_ESP32C3_DEV
-  #include <driver/rtc_io.h>
-#endif
-
+#include <driver/rtc_io.h>
 #include "backlightcontrols.h"
 #include "config.h"
 #include "display.h"
@@ -80,8 +76,8 @@ void Utility::sleepCore() {
           rtc_gpio_pulldown_dis((gpio_num_t)i);
         }
       }
-      #if defined(ARDUINO_ESP32C3_DEV) || defined(ARDUINO_ESP32S3_DEV)
-        // S3/C3: native GPIO wake on LOW level (button PRESS, not release)
+      #if defined(ARDUINO_ESP32S3_DEV)
+        // S3: native GPIO wake on LOW level (button PRESS, not release)
         for (uint8_t i = 0; i < 40; i++) {
           if (mask & (1ULL << i)) {
             gpio_wakeup_enable((gpio_num_t)i, GPIO_INTR_LOW_LEVEL);
@@ -779,8 +775,8 @@ void Utility::pruneLittleFS() {
 
   // As with verifyLittleFS, the root listing only yields directory entries under LittleFS, so
   // the two directories are walked explicitly. Directory entries themselves are never removed.
-  // Keep this list closed to these two: /logs (the log ring, see logging.h) is root-level on purpose, and a sweep
-  // widened to the root would delete the very log someone is trying to read.
+  // Keep this list closed to these two: the config and playlist files live at the root, and a sweep widened to it
+  // would delete them.
   static const char* const dirs[] = {"/www", "/data"};
   for (const char* dir : dirs) {
     File root = LittleFS.open(dir);

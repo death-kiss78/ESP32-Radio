@@ -5,9 +5,7 @@
 #include <esp_log.h>
 #include <ESPFileUpdater.h>
 #include <nvs_flash.h>
-#ifndef ARDUINO_ESP32C3_DEV
-  #include <driver/rtc_io.h>
-#endif
+#include <driver/rtc_io.h>
 #include "config.h"
 #include "backlightcontrols.h"
 #include "battery.h"
@@ -24,6 +22,7 @@
 #include "../displays/dspcore.h"
 #include "../displays/themes.h"
 #include "../displays/themeregistry.h"
+#include "../displays/layoutregistry.h"
 #ifdef USE_SD
   #include "sdmanager.h"
 #endif
@@ -35,10 +34,8 @@ const char* const Config::wwwFiles[] = {"options.js", "script.js", "script2.js",
                                         "editor.html", "player.html"}; // keep main page at end (deleted when upgraded, last to be downloaded, so user sees emptyfs_html with wait message)
 const size_t Config::wwwFilesCount = sizeof(Config::wwwFiles) / sizeof(Config::wwwFiles[0]);
 
-// The theme slots are optional files rather than required ones, so they are here purely to keep
-// pruneLittleFS() from deleting them: that function compares each /data file's basename against this
-// list, which is why THEME_SLOT_FILES holds bare names and not paths.
-const char* const Config::dataFiles[] = {PLAYLIST_FILE, SSIDS_FILE, VERSION_FILE, THEME_SLOT_FILES};
+const char* const Config::dataFiles[] = {PLAYLIST_FILE, SSIDS_FILE, VERSION_FILE, THEME_SLOT_FILES, LAYOUT_SLOT_FILES};
+// The theme and layout slots are optional files rather than required ones, so they are here purely to keep pruneLittleFS() from deleting them
 const size_t Config::dataFilesCount = sizeof(Config::dataFiles) / sizeof(Config::dataFiles[0]);
 
 #if defined(SPI_BUS_SECONDARY)
@@ -412,6 +409,7 @@ void Config::initPlaylistMode() {
 
 void Config::_initHW() {
   loadTheme();
+  loadLayout();
   #if IR_PIN!=255
     loadIR();
   #endif
@@ -437,6 +435,16 @@ void Config::loadTheme() {
   #endif
 }
 
+void Config::loadLayout() {
+  // Through the registry for the same reason loadTheme() is: the id may name a user slot, and it may name
+  // one whose file has since been deleted, so layoutValidId() resolves it to something real or to 0.  The
+  // values themselves are read by the display task, which copies from this same id into activeLayout.
+  // A build with no display has no registry and no layouts at all, so the stored id is left exactly as it was.
+  #ifndef DUMMYDISPLAY
+    config.store.layoutId = layoutValidId(config.store.layoutId);
+  #endif
+}
+
 void Config::defaultSettings(const char *val, uint8_t clientId) {
   if (strcmp(val, "controls") == 0) {
     saveValue(&store.smartstart, (bool)SMART_START);
@@ -459,8 +467,10 @@ void Config::defaultSettings(const char *val, uint8_t clientId) {
     saveValue(&store.systemFontId, (uint8_t)DISPLAYFONT);
     saveValue(&store.clockFontId, (uint8_t)CLOCKFONT);
     saveValue(&store.numplaylist, (bool)NUMBERED_PLAYLIST);
+    saveValue(&store.playlistPages, (bool)PLAYLIST_MODE_PAGED);
     saveValue(&store.clock12, (bool)CLOCK_TWELVE);
     saveValue(&store.clockglow, (bool)CLOCKGLOW);
+    saveValue(&store.pretextALLCAPS, (bool)PRETEXT_ALLCAPS);
     saveValue(&store.volumepage, (bool)VOLUME_PAGE);
     saveValue(&store.bufferbar, (bool)SHOW_BUFFERBAR);
     saveValue(&store.vumeter, (bool)SHOW_VU_METER);
@@ -580,38 +590,39 @@ void Config::setDefaults() {
 #if IR_PIN!=255
 /* ===== IR code storage =====
    One NVS key per remote button in the dedicated "ehradioir" namespace, each holding that button's
-   3 codes. The behaviour id travels in the same row as the field offset and NVS key, so the table
-   cannot fall out of sync and row order is irrelevant. */
+   3 codes. The behaviour id and the compile-time default travel in the same row as the field offset
+   and NVS key, so the table cannot fall out of sync and row order is irrelevant. */
 struct irKeyMapEntry {
   size_t      fieldOffset;
   const char* key;
   size_t      size;
   uint8_t     action;
+  uint64_t    def;  // IR_BUTTON_* value for slot 0, written into a reset store only; 0 = no default
 };
 
-#define IR_KEY_ENTRY(field, keyname, act) { offsetof(irstore_t, field), keyname, sizeof(((irstore_t*)0)->field), act }
+#define IR_KEY_ENTRY(field, keyname, act, def) { offsetof(irstore_t, field), keyname, sizeof(((irstore_t*)0)->field), act, def }
 
 static const irKeyMapEntry irKeyMap[] = {
-  IR_KEY_ENTRY(power,  "power",  IRACT_POWER),
-  IR_KEY_ENTRY(mute,   "mute",   IRACT_MUTE),
-  IR_KEY_ENTRY(up,     "up",     IRACT_UP),
-  IR_KEY_ENTRY(down,   "down",   IRACT_DOWN),
-  IR_KEY_ENTRY(prev,   "prev",   IRACT_PREV),
-  IR_KEY_ENTRY(next,   "next",   IRACT_NEXT),
-  IR_KEY_ENTRY(play,   "play",   IRACT_PLAY),
-  IR_KEY_ENTRY(mode,   "mode",   IRACT_MODE),
-  IR_KEY_ENTRY(hash,   "hash",   IRACT_HASH),
-  IR_KEY_ENTRY(n0,     "n0",     IRACT_DIGIT),
-  IR_KEY_ENTRY(n1,     "n1",     IRACT_DIGIT),
-  IR_KEY_ENTRY(n2,     "n2",     IRACT_DIGIT),
-  IR_KEY_ENTRY(n3,     "n3",     IRACT_DIGIT),
-  IR_KEY_ENTRY(n4,     "n4",     IRACT_DIGIT),
-  IR_KEY_ENTRY(n5,     "n5",     IRACT_DIGIT),
-  IR_KEY_ENTRY(n6,     "n6",     IRACT_DIGIT),
-  IR_KEY_ENTRY(n7,     "n7",     IRACT_DIGIT),
-  IR_KEY_ENTRY(n8,     "n8",     IRACT_DIGIT),
-  IR_KEY_ENTRY(n9,     "n9",     IRACT_DIGIT),
-  {0, nullptr, 0, 0} // Yup, 4 fields - don't delete the last line!
+  IR_KEY_ENTRY(power,  "power",  IRACT_POWER,  IR_BUTTON_POWER),
+  IR_KEY_ENTRY(mute,   "mute",   IRACT_MUTE,   IR_BUTTON_MUTE),
+  IR_KEY_ENTRY(up,     "up",     IRACT_UP,     IR_BUTTON_UP),
+  IR_KEY_ENTRY(down,   "down",   IRACT_DOWN,   IR_BUTTON_DOWN),
+  IR_KEY_ENTRY(prev,   "prev",   IRACT_PREV,   IR_BUTTON_PREV),
+  IR_KEY_ENTRY(next,   "next",   IRACT_NEXT,   IR_BUTTON_NEXT),
+  IR_KEY_ENTRY(play,   "play",   IRACT_PLAY,   IR_BUTTON_PLAY),
+  IR_KEY_ENTRY(mode,   "mode",   IRACT_MODE,   IR_BUTTON_MODE),
+  IR_KEY_ENTRY(hash,   "hash",   IRACT_HASH,   IR_BUTTON_HASH),
+  IR_KEY_ENTRY(n0,     "n0",     IRACT_DIGIT,  IR_BUTTON_N0),
+  IR_KEY_ENTRY(n1,     "n1",     IRACT_DIGIT,  IR_BUTTON_N1),
+  IR_KEY_ENTRY(n2,     "n2",     IRACT_DIGIT,  IR_BUTTON_N2),
+  IR_KEY_ENTRY(n3,     "n3",     IRACT_DIGIT,  IR_BUTTON_N3),
+  IR_KEY_ENTRY(n4,     "n4",     IRACT_DIGIT,  IR_BUTTON_N4),
+  IR_KEY_ENTRY(n5,     "n5",     IRACT_DIGIT,  IR_BUTTON_N5),
+  IR_KEY_ENTRY(n6,     "n6",     IRACT_DIGIT,  IR_BUTTON_N6),
+  IR_KEY_ENTRY(n7,     "n7",     IRACT_DIGIT,  IR_BUTTON_N7),
+  IR_KEY_ENTRY(n8,     "n8",     IRACT_DIGIT,  IR_BUTTON_N8),
+  IR_KEY_ENTRY(n9,     "n9",     IRACT_DIGIT,  IR_BUTTON_N9),
+  {0, nullptr, 0, 0, 0} // Yup, 5 fields - don't delete the last line!
 };
 static const size_t irKeyMapCount = sizeof(irKeyMap) / sizeof(irKeyMap[0]) - 1;
 
@@ -629,6 +640,17 @@ void Config::loadIR() {
     prefs.clear();
     uint16_t m = IR_MAGIC;
     prefs.putBytes(IR_MAGIC_KEY, &m, sizeof(m));
+    // Defaults land here and nowhere else: a store carrying the magic is the user's own set.  They are
+    // written through immediately, because the next boot finds the magic valid, reads no key for them
+    // and leaves the memset value standing.
+    uint8_t seeded = 0;
+    for (size_t i = 0; i < irKeyMapCount; ++i) {
+      if (irKeyMap[i].def == 0) continue;
+      uint8_t* field = (uint8_t*)&irstore + irKeyMap[i].fieldOffset;
+      ((uint64_t*)field)[0] = irKeyMap[i].def;
+      if (prefs.putBytes(irKeyMap[i].key, field, irKeyMap[i].size) == irKeyMap[i].size) ++seeded;
+    }
+    if (seeded) FUNCTIONLOG("loadIR", "Seeded %u default IR code(s)", (unsigned)seeded);
   } else {
     for (size_t i = 0; i < irKeyMapCount; ++i) {
       uint8_t* field = (uint8_t*)&irstore + irKeyMap[i].fieldOffset;
@@ -1028,6 +1050,8 @@ const configKeyMap Config::keyMap[] = {
   CONFIG_KEY_ENTRY(systemFontId, "sysfont"),
   CONFIG_KEY_ENTRY(clockFontId, "clockfont"),
   CONFIG_KEY_ENTRY(clockglow, "clockglow"),
+  CONFIG_KEY_ENTRY(playlistPages, "plpaged"),
+  CONFIG_KEY_ENTRY(pretextALLCAPS, "allcaps"),
   CONFIG_KEY_ENTRY(brightness, "bright"),
   CONFIG_KEY_ENTRY(screensaverEnabled, "scrnsvren"),
   CONFIG_KEY_ENTRY(screensaverBlank, "scrnsvrbl"),
