@@ -18,9 +18,9 @@
       "description": "ehRadio - trip5_ili9488_pcm_1button"
     },
     {
-      "name": "Trip5 Big Color Screen with 1-Button (Full)",
-      "manifest": "manifests/trip5_ili9488_pcm_1button_full-manifest.json",
-      "description": "ehRadio - trip5_ili9488_pcm_1button_full"
+      "name": "Trip5 Big Color Screen with 1-Button Redux",
+      "manifest": "manifests/trip5_ili9488_vs1053_1button-manifest.json",
+      "description": "ehRadio - trip5_ili9488_vs1053_1button"
     },
     {
       "name": "Trip5 Color Screen with 1-Button",

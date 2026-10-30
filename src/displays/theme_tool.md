@@ -1,17 +1,30 @@
-# Importing Themes with `importtheme.py`
+# Themes: `theme_tool.py`
 
 
 ## Want a Good Theme Editor?
 
-Try: https://vip-cxema.org/index.php/online-kalkulyatory/yoradio-redaktor-tem
-
-Which can be mostly be used to feed the importtheme.py script... read below for more information.
+If you have a legacy yoRadio theme or a theme created by a yoRadio theme maker such as
+https://vip-cxema.org/index.php/online-kalkulyatory/yoradio-redaktor-tem then it
+can be used to feed `theme_tool.py -i`... read below for more information.
 
 ## What it does
 
-[`importtheme.py`](../src/displays/importtheme.py) turns theme files into ehRadio's
-[`themes.h`](../src/displays/themes.h) runtime entries. It always appends to the existing `themes.h` —
-never overwrites.
+[`theme_tool.py`](theme_tool.py) turns theme files into ehRadio's
+[`themes.h`](../src/displays/themes.h) runtime entries **and** into the WebUI palette block that entry belongs
+to in [`themes.css`](../data/www/themes.css). There are two ways in, and they mirror each other: `-i` **adds** a
+theme at the end of `themes.h`, while `-f` **corrects** one that is already there by replacing its values in
+place. Neither ever rewrites another theme's numbers. In both cases the block is written *deflated*, so the two
+sides of a theme are one run and one index apart: the entry in `_themes[]`, its name in `_themeNames[]`, and the
+block that names itself with `--theme-name`.
+
+The WebUI block comes from the display colours through the same feature map the panel themes were designed
+with, with the offset measured from display theme `[0]` — the theme `:root` in `style.css` was designed for —
+which is what keeps a generated block at ten to twenty lines. `:root` itself is neither read nor written as a
+document: it stays the design, and `theme_tool.py --inflate` / `--deflate` is how it is retuned.
+
+If the two files disagree about how many themes there are, or about their ids, the script stops and asks you
+to hand-edit before it touches anything. A difference in *name* is not a stop: `_themeNames[]` is the
+authority, and every `--theme-name` in `themes.css` is refreshed from it on each run.
 
 Two input formats, told apart by the file itself:
 
@@ -20,13 +33,51 @@ Two input formats, told apart by the file itself:
   `Backup All` array. See *JSON input* below; it is the shorter read.
 
 ```
-py importtheme.py mytheme.h --name "My Theme"      # old style, a name is required
-py importtheme.py "ehRadioTheme-My Neon.json"      # one theme, named by the file
-py importtheme.py ehRadioThemes-Backup.json        # a whole backup, numbered
+py theme_tool.py -i mytheme.h --name "My Theme"      # old style: there is no name inside to use
+py theme_tool.py -i "ehRadioTheme-My Neon.json"      # asks whether to use the name inside
+py theme_tool.py -i ehRadioThemes-Backup.json        # a whole backup, asked and numbered per theme
+py theme_tool.py -f "ehRadioTheme-My Neon.json"      # correct that theme's values, keeping its name
 ```
+
+Without `--name` the tool prints the name the file carries and asks whether to use it:
+
+```
+The theme should be formatted as "Name (Creator)".
+The current name is "My Neon".
+Do you wish to use this name? [y/N]
+```
+
+Refusing writes nothing and prints the command that would name it, path and all, because a theme's name is
+only ever set on the command line. A theme file with no name inside - every old-style `.h`, and a JSON whose
+`name` is empty - does not get the question at all: it goes straight to that command.
 
 Either way, every colour written is put onto the 565 steps the WebUI editor uses — see
 *565 steps and `--quantise`* below.
+
+## Correcting a theme (`--fix`)
+
+A theme can land on the device with a value that is wrong — a field the browser could not show, a colour mistyped
+in a hand-edited file. `--fix` repairs that in the theme's own slot instead of adding a second one:
+
+```
+py theme_tool.py -f "ehRadioTheme-My Neon.json"        # asks which theme to replace
+py theme_tool.py -f "ehRadioTheme-My Neon.json" -n 4   # slot 4, no question
+```
+
+It lists the themes from `_themeNames[]` and replaces the entry you pick, keeping the name `themes.h` already
+has: nothing is asked about the name, `--name` does not apply, and `_themeNames[]` is not touched. The file must
+hold **one** theme — a `Backup All` array is refused, because a fix replaces a single slot; use `-i` to add them
+all. An entry that already matches the file is left byte for byte alone.
+
+`themes.h` is always written; `themes.css` is not, unless you answer the closing question:
+
+```
+Apply the correction to block [4] of themes.css as well? [y/N]
+```
+
+Yes regenerates just that block from the corrected entry, with the same generator an import uses — the one case
+where re-deriving is right after a hand edit, because the entry is now the newer truth. No leaves the block
+untouched, which is what you want when the block was tuned by hand and the *display* entry was the wrong half.
 
 ## Input format (old yoRadio style)
 
@@ -89,15 +140,20 @@ Either way, every colour written is put onto the 565 steps the WebUI editor uses
 | `COLOR_PL_CURRENT_BG` | `.plcurrentbg` |
 | `COLOR_PLAYLIST_0..4` | `.playlist[0..4]` |
 
+The clock family is the clock's own. `.digit` / `COLOR_DIGITS` is the ink of the big number widget (`numConf` -
+the volume, the station number and the SD counter), and `.digitbg` is that widget's glow colour, which is why the
+number no longer borrows the clock's backdrop. A theme that glows is a theme where `clockbg` (or `digitbg`) differs
+from the background; on a one-bit palette each is equal to it and nothing glows.
+
 Two legacy defines are ignored: `COLOR_STATION_FILL` (the meta band is drawn with `.metabg`) and
 `COLOR_PL_CURRENT_FILL` (the playlist highlight is drawn with `.plcurrentbg`). Likewise any JSON key the
 script does not recognise is skipped.
 
-Three fields in `ThemeData` have **no** old-format counterpart, so no `COLOR_*` maps to them: `.line`
-(sits between `.div` and `.weather`), `.vuaxis` (between `.weather` and `.vupeak`) and `.textss`
-(between `.datess` and `.buffer`). All three are derived by rule - the first two from `.div`, the third
-from `.clockss`, see below. They still occupy their place in `FIELD_ORDER`, because the emitted entries
-are designated initialisers and have to follow the struct's own order.
+Four fields in `ThemeData` have **no** old-format counterpart, so no `COLOR_*` maps to them: `.digitbg`
+(between `.digit` and `.div`), `.line` (between `.div` and `.weather`), `.vuaxis` (between `.weather` and
+`.vupeak`) and `.textss` (between `.datess` and `.buffer`). All four are derived by rule - `.digitbg` from
+`.digit`, the next two from `.div`, the last from `.clockss`, see below. They still occupy their place in
+`FIELD_ORDER`, because the emitted entries are designated initialisers and have to follow the struct's own order.
 
 ## Smart fallbacks
 
@@ -109,8 +165,8 @@ If a color is missing from the old file, the script fills it in automatically:
 | `.dow` | `.date` (same color) |
 | `.battery` | `.rssi` (same color) |
 
-Any *other* missing field is filled with `.meta` and flagged with a `// needs fixing?` comment
-on the generated line, so the values that need a human eye are easy to spot.
+Any *other* missing field is filled with `.meta`. Nothing is annotated in the output: an entry carries no
+comment but its name header, so a value worth a human eye is found by reading the theme.
 
 ## Screensaver colors — COMPUTED, CHECK MANUALLY!
 
@@ -137,10 +193,11 @@ If the old theme file has `COLOR_CLOCK_SS` etc., those values are used directly.
 | `.dowss` | `.dow` | 50% |
 | `.datess` | `.date` | 50% |
 | `.clockbg` | `.clock` | 15% |
+| `.digitbg` | `.digit` | 15% |
 
 `.textss` is deliberately **not** in that table. It is a rule rather than a computed guess - the
 screensaver's info line is the same ink as the screensaver clock, so it is `.clockss` verbatim, which
-is why it is listed under the derived rules below and carries no `// needs fixing?` marker.
+is why it is listed under the derived rules below.
 
 **These computed values are a starting point — they should be reviewed and
 tweaked by hand.** The screensaver runs on a black background and often benefits
@@ -156,15 +213,16 @@ Example of hand-adjusted screensaver colors in a theme entry:
 .datess        = RGB(255, 255, 255),
 ```
 
-## Line, VU axis and info line — DERIVED, NO REVIEW NEEDED
+## Line, VU axis, digits glow and info line — DERIVED, NO REVIEW NEEDED
 
-Three palette entries were added to ehRadio after the old theme format was defined, so no old theme file
-can carry them. `.line` and `.vuaxis` derive from `.div`, which every theme file sets, and `.textss`
-from `.clockss` - which makes them rules rather than guesses:
+Four palette entries were added to ehRadio after the old theme format was defined, so no old theme file
+can carry them. `.line` and `.vuaxis` derive from `.div`, which every theme file sets, `.textss` from
+`.clockss`, and `.digitbg` from `.digit` - which makes them rules rather than guesses:
 
 | Field | Derived from | Multiplier | Consumed by |
 |---|---|---|---|
 | `.line` | `.div` | 100% (the divider verbatim) | the under and over line widgets (`underLineConf` / `overLineConf` in the layout) |
+| `.digitbg` | `.digit` | 15% | the glow behind the big number widget (`numConf`): volume, station number and SD counter |
 | `.vuaxis` | `.div` | 25% | every reference line the VU draws: the centre cross, the bar baseline, the histogram line and the Spectrum divider |
 | `.textss` | `.clockss` | 100% (verbatim) | the scrolling info line the screensaver draws when `screensavertext` is on |
 
@@ -175,9 +233,9 @@ Black (229,229,229 on 255 white), Ocean (0,0,62 on 0,0,91) and vip-cxema (29,29,
 divider keeps real contrast on black and on white alike - white dividers give 63, Graphite's 91 gives
 22 - and it reads as a relationship, the axis being a dimmed divider.
 
-Because the two are derived by a stated rule, the script emits them **without** the
-`// needs fixing?` marker (they are listed in `DERIVED_RULES`); every other computed fallback keeps its
-marker, because those are still eyeballed.
+Every one of these is a stated rule, and so is every other row of `COMPUTED_FALLBACK`; the script
+annotates nothing either way, so a fallback is judged from its row in the tables above rather than from a
+marker in the output.
 
 On reduced palettes the rule is overridden by hand, in the palette rather than the theme:
 `displaySSD1322.cpp` sets `.line = GRAY_9` (equal to its `.div`) and `.vuaxis = GRAY_3`, since a
@@ -222,11 +280,10 @@ This script writes those same numbers, so a palette, the editor and the panel al
 Everything the script writes is snapped onto those steps, including the computed fallbacks, which are
 percentages of another colour and so land anywhere.
 
-`--quantise` does the same for the colours **already** in `themes.h`:
+`-q` / `--quantise` does the same for the colours **already** in `themes.h`:
 
 ```
-py importtheme.py --quantise --dry-run     # report, then write themes.h.new.h
-py importtheme.py --quantise               # rewrite themes.h
+py theme_tool.py -q     # report what it moved, then rewrite themes.h
 ```
 
 It cannot change a pixel: `(r >> 3) * 8` packs back to the same 565 that `r` did, so the panel draws the
@@ -235,16 +292,22 @@ the file's alignment survives, and a value already on a step is left alone — w
 run report nothing to do. It says how many colours it moved, and it refuses to write at all if any of them
 would have changed its 565.
 
-## Dry-run mode
+## Checking the two files
 
-Always test first with `--dry-run`:
+Run the tool with no argument, or with `-a`, to see whether `themes.h` and `themes.css` still describe the
+same themes:
 
 ```
-py importtheme.py mytheme.h --name "Test" --dry-run
+py theme_tool.py
+py theme_tool.py -a
 ```
 
-This writes to `themes.h.new.h` without modifying the real file. It is what `--quantise --dry-run` uses
-too.
+It reports the theme count on both sides, any block whose `--theme-name` no longer matches `_themeNames[]`,
+and how many `RGB()` values in `themes.h` are off the 565 steps. It writes nothing.
+
+A mismatch in the count or in the ids is a hard error, and every mode refuses to guess which side is right:
+both files are positions in one list, so hand-edit them until they agree. A name that differs is only a
+warning - `_themeNames[]` is the authority and the next import rewrites the copies in `themes.css` from it.
 
 ## Note Regarding "Invert Title"
 
