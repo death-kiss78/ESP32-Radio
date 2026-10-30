@@ -3,11 +3,16 @@
 #pragma once
 
 #include "options.h"
+#include "config.h"
 #include <Arduino.h>
 #include <FS.h>
 #include <Ticker.h>
 
 bool clockTrustworthy();
+
+// Fills 'out' with the current local time and returns true only when the system clock is real
+// (past the one-year epoch floor).  The single place the time(NULL)/localtime_r() read lives.
+bool systemLocalTime(struct tm& out);
 
 /* ===== Deep Sleep Wake GPIO Mask =====
    All defined input pins on RTC-capable GPIOs are automatically used as wake sources.
@@ -19,8 +24,6 @@ bool clockTrustworthy();
   #define _IS_RTC(p) ((p)==0||(p)==2||(p)==4||((p)>=12&&(p)<=15)||((p)>=25&&(p)<=27)||((p)>=32&&(p)<=39))
 #elif defined(ARDUINO_ESP32S3_DEV)
   #define _IS_RTC(p) ((p)<=21)
-#elif defined(ARDUINO_ESP32C3_DEV)
-  #define _IS_RTC(p) ((p)!=255)  // any input-capable GPIO works with esp_deep_sleep_enable_gpio_wakeup
 #endif
 
 // Build individual wake bits: only include pins on RTC GPIOs; skip pins left at 255
@@ -124,6 +127,9 @@ public:
   char* stationByNum(uint16_t num);
   uint16_t fillPlaylistRange(int from, uint8_t count, char names[][STATION_FIELD_LENGTH / 2]);
   void doSleepW();
+  static void requestSleep();
+  static void requestSleepWake();
+  void serviceSleep();
   void sleepForAfter(uint16_t sleepfor, uint16_t sa = 0);
   void stopStandby();
   void startStandby();
@@ -135,6 +141,7 @@ public:
 
 private:
   static uint16_t sleepfor;
+  static volatile uint8_t sleepWanted;   // 0 = none, 1 = doSleepW (no wake timer), 2 = doSleep (wake after sleepfor)
   static void sleepCore();
   static void doSleep();
   char ipBuf[16] = {0};

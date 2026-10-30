@@ -9,6 +9,7 @@
 #endif
 #include <LittleFS.h>
 #include <Preferences.h>
+#include "options.h"
 #include "logging.h"
 #include "../locale/dsplocale.h"
 #include "../displays/widgets/widgetsconfig.h"
@@ -46,9 +47,17 @@ extern uint32_t vuPsramBytes;
 #define REAL_PLAYL   config.getMode()==PM_WEB?PLAYLIST_PATH:PLAYLIST_SD_PATH
 #define REAL_INDEX   config.getMode()==PM_WEB?INDEX_PATH:INDEX_SD_PATH
 
+#ifndef MAX_PLAYLIST_ENTRIES
+  #define MAX_PLAYLIST_ENTRIES 65535 // unint_16 maximum
+#endif
+
 #define WEATHERKEY_LENGTH 64
 #define MDNS_LENGTH 32
 #define EHDPNAME_LENGTH 32
+
+static constexpr size_t STATION_FIELD_LENGTH = 170; // Max length for station name, URL and title fields
+static constexpr size_t WEATHER_STRING_L = 512; // Weather string buffer
+static constexpr uint32_t NVS_SLOW_WRITE_MS = 50; // ms a single NVS commit may take before FUNCTIONLOG names the key
 
 #define ESPFILEUPDATER_USERAGENT "ehradio/" RADIOVERSION "(" GITHUBURL ")"  // used as a user-agent string for downloading with ESPFileUpdater
 
@@ -65,10 +74,10 @@ struct theme_t {
   uint16_t background;
   uint16_t meta;
   uint16_t metabg;
-  uint16_t metafill;
   uint16_t title1;
   uint16_t title2;
   uint16_t digit;
+  uint16_t digitbg;
   uint16_t div;
   uint16_t line;
   uint16_t weather;
@@ -99,7 +108,6 @@ struct theme_t {
   uint16_t volbarin;
   uint16_t plcurrent;
   uint16_t plcurrentbg;
-  uint16_t plcurrentfill;
   uint16_t playlist[5];
 };
 struct config_t // specify defaults here (and macros in options.h) (defaults are NOT saved to Prefs)
@@ -137,22 +145,24 @@ struct config_t // specify defaults here (and macros in options.h) (defaults are
   uint8_t   themeId = 0;
   bool      dspon = true;
   bool      numplaylist = NUMBERED_PLAYLIST;
+  bool      playlistPages = PLAYLIST_MODE_PAGED;
   bool      clock12 = CLOCK_TWELVE;
   bool      volumepage = VOLUME_PAGE;
   bool      bufferbar = SHOW_BUFFERBAR;
   bool      vumeter = SHOW_VU_METER;
   bool      vupeak = SHOW_VU_PEAK;
-  uint8_t   vustyle = VU_STYLE_DEFAULT;   // which visualiser the VU box draws; see vuStyle_e
-  // Fonts are a runtime choice now (plans/font-overhaul.md), so these macros are only the boot defaults:
-  // systemFontId indexes _systemFonts/_systemFontNames in dspfont.h, clockFontId is the clock *style* (its
-  // size comes from the layout), and clockglow is the LED/VFD background behind the clock digits.
+  uint8_t   vustyle = VU_STYLE_DEFAULT;
   uint8_t   systemFontId = DISPLAYFONT;
   uint8_t   clockFontId = CLOCKFONT;
+  bool      pretextALLCAPS = PRETEXT_ALLCAPS;
   bool      clockglow = CLOCKGLOW;
+  bool      digitsglow = DIGITSGLOW;
   uint8_t   brightness = SCREEN_BRIGHTNESS;
   bool      dimmingEnabled = DIMMING_ENABLED;
   uint16_t  dimmingTimeout = DIMMING_TIMEOUT;
   uint8_t   dimmingBrightness = DIMMING_BRIGHTNESS;
+
+  // Screensaver
   bool      screensaverEnabled = SS_NOTPLAYING;
   bool      screensaverBlank = SS_NOTPLAYING_BLANK;
   uint16_t  screensaverTimeout = SS_NOTPLAYING_TIME;
@@ -160,10 +170,13 @@ struct config_t // specify defaults here (and macros in options.h) (defaults are
   bool      screensaverPlayingBlank = SS_PLAYING_BLANK;
   uint16_t  screensaverPlayingTimeout = SS_PLAYING_TIME;
   bool      screensaverFullDateTime = SS_FULL_DATETIME;
-  bool      screensaverText = SS_TEXT;
+  bool      screensaverText = SS_INFO_TEXT;
+  bool      screensaverClockSmaller = SS_SMALLER_CLOCK;
   bool      screensaverVU = SS_VU;
   uint8_t   screensaverVUStyle = SS_VU_STYLE;
   bool      screensaverVUpeak = SS_VUPEAK;
+  bool      sleeptimer = SS_SLEEPTIMER;
+  uint16_t  sleepSsTimeout = SS_SLEEPTIME;
 
   // Locale
   char      locale_webui[6] = WEBUI_LOCALE;
@@ -290,6 +303,7 @@ class Config {
     volatile uint16_t vuThreshold = 0;
     volatile uint16_t screensaverTicks = 0;
     volatile uint16_t screensaverPlayingTicks = 0;
+    volatile uint16_t sleepTicks = 0;   // seconds the screensaver has been up, for the sleep timer
     volatile bool     isScreensaver = false;
     volatile bool     displayIsInverted = false;
     volatile int      newConfigMode = 0;
@@ -300,6 +314,7 @@ class Config {
     void initSDPlaylist(bool force = false);
     void initPlaylistMode();
     void loadTheme();
+    void loadLayout();
     #if IR_PIN!=255
       void loadIR();
       void saveIR();
@@ -313,6 +328,7 @@ class Config {
       uint8_t irAction(uint8_t button);
     #endif
     void defaultSettings(const char *val, uint8_t clientId);
+    void resetScreensaverTimers(uint16_t value);
     void processDeferredSaves();
     uint8_t setVolume(uint8_t val);
     void setTone(int8_t bass, int8_t middle, int8_t treble);
@@ -332,9 +348,13 @@ class Config {
     }
     void lastStation(uint16_t newstation) {
       if (getMode()==PM_WEB) store.lastStation = newstation;
-      else saveValue(&store.lastSdStation, newstation);
+      else saveValueButWait(&store.lastSdStation, newstation, 5000);
     }
     uint8_t getMode() { return store.play_mode; }
+    bool vuSourceWanted() const {
+      const bool ss = isScreensaver;
+      return (store.vumeter && !ss) || (ss && store.screensaverVU);
+    }
     FS* SDPLFS() { return _SDplaylistFS; }
     void syncSDFS();  // update _SDplaylistFS after external play_mode changes (e.g. button hold)
     bool isRTCFound() { return _rtcFound; };
@@ -371,15 +391,17 @@ class Config {
       }
       if (needSave) {
         prefs.putBytes(entry->key, value, size);
-        if (strcmp(entry->key, "mqttpass") == 0 || strcmp(entry->key, "weatherkey") == 0) {
-          FUNCTIONLOG("Config.key", "%s: *", entry->key);
-        } else if (size > 4) {
-          FUNCTIONLOG("Config.key", "%s: %s", entry->key, static_cast<const char*>(value));
-        } else {
-          uint32_t rawValue = 0;
-          memcpy(&rawValue, value, size);
-          FUNCTIONLOG("Config.key", "%s: %lu", entry->key, static_cast<unsigned long>(rawValue));
-        }
+        #ifdef CONFIG_KEY_DEBUG
+          if (strcmp(entry->key, "mqttpass") == 0 || strcmp(entry->key, "weatherkey") == 0) {
+            FUNCTIONLOG("Config.key", "%s: *", entry->key);
+          } else if (size > 4) {
+            FUNCTIONLOG("Config.key", "%s: %s", entry->key, static_cast<const char*>(value));
+          } else {
+            uint32_t rawValue = 0;
+            memcpy(&rawValue, value, size);
+            FUNCTIONLOG("Config.key", "%s: %lu", entry->key, static_cast<unsigned long>(rawValue));
+          }
+        #endif
       }
       prefs.end();
       // An NVS commit can block when it has to compact a page, evidence is a long write time
@@ -468,9 +490,8 @@ class Config {
     void setDefaults();
 
     uint16_t _randomStation() {
-      randomSeed(esp_random() ^ millis());
-      uint16_t station = random(1, store.countStation);
-      return station;
+      if (store.countStation < 2) return store.countStation ? 1 : 0;
+      return random(1, (long)store.countStation + 1);
     }
 };
 

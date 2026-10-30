@@ -12,7 +12,6 @@
 #include "../../core/player.h"    //  for VU widget
 #include "../../core/utility.h"
 
-
 /************************
       FILL WIDGET
  ************************/
@@ -25,14 +24,15 @@ void FillWidget::init(FillConfig conf, uint16_t bgcolor){
 }
 
 // A filled rectangle, or its frame.  The colour is the same either way - it is the one the widget was constructed
-// with, which is theme.line for the two reference lines, metafill for the meta band, plcurrentfill for the playlist
-// highlight - so a conf that says outlined draws the same pixels as one that does not until both dimensions are 2 or
-// more, a one-pixel-thick rectangle being its own outline.  The frame is drawn inside the given bounds and the
-// interior is left alone: clearing it to the background would erase the widgets the frame exists to enclose.
+// with, which is theme.line for the two reference lines, metabg for the meta band (line when the title is inverted)
+// and plcurrentbg for the playlist highlight - so a conf that says outlined draws the same pixels as one that does
+// not until both dimensions are 2 or more, a one-pixel-thick rectangle being its own outline.  The frame is drawn
+// inside the given bounds and the interior is left alone: clearing it to the background would erase the widgets it
+// exists to enclose.
 void FillWidget::_draw(){
   if(!_active) return;
-  if (_outlined) dsp.drawRect(_config.left, _config.top, _width, _height, _bgcolor);
-  else           dsp.fillRect(_config.left, _config.top, _width, _height, _bgcolor);
+  if (_outlined) dsp.drawRect(_config.offset, _config.top, _width, _height, _bgcolor);
+  else           dsp.fillRect(_config.offset, _config.top, _width, _height, _bgcolor);
 }
 
 void FillWidget::setHeight(uint16_t newHeight){
@@ -52,7 +52,7 @@ void TextWidget::_charSize(uint8_t textsize, uint8_t& width, uint16_t& height){
   height = textsize * CHARHEIGHT;
 }
 
-void TextWidget::init(WidgetConfig wconf, uint16_t buffsize, bool uppercase, uint16_t fgcolor, uint16_t bgcolor) {
+void TextWidget::init(WidgetConfig wconf, uint16_t fgcolor, uint16_t bgcolor, uint16_t buffsize) {
   Widget::init(wconf, fgcolor, bgcolor);
   _buffsize = buffsize;
   if (_text)    { free(_text);    _text = nullptr; }
@@ -64,7 +64,6 @@ void TextWidget::init(WidgetConfig wconf, uint16_t buffsize, bool uppercase, uin
   _charSize(_config.textsize, _charWidth, _textheight);
   _textwidth = _oldtextwidth = _oldleft = 0;
   _textPainted = false;   // a re-init is a new layout: the old rectangle no longer describes where this widget is
-  _uppercase = uppercase;
 }
 
 void TextWidget::setText(const char* txt) {
@@ -123,23 +122,28 @@ void TextWidget::_paint() {
 }
 
 void TextWidget::setText(int val, const char *format){
-  char buf[_buffsize];
-  snprintf(buf, _buffsize, format, val);
+  // A fixed array: a stack VLA is a GCC extension, and a formatted value is a number or a short label.
+  // setText() truncates to the widget's own buffer anyway, which is what decides what is drawn.
+  char buf[WIDGET_BUFF_SIZE];
+  snprintf(buf, sizeof(buf), format, val);
   setText(buf);
 }
 
 void TextWidget::setText(const char* txt, const char *format){
-  char buf[_buffsize];
-  snprintf(buf, _buffsize, format, txt);
+  char buf[WIDGET_BUFF_SIZE];
+  snprintf(buf, sizeof(buf), format, txt);
   setText(buf);
 }
 
 uint16_t TextWidget::_realLeft(bool w_fb) {
   uint16_t realwidth = (_width>0 && w_fb)?_width:dsp.width();
-  uint16_t offset = w_fb?0:_config.left;
+  uint16_t offset = w_fb?0:_config.offset;
   // Text wider than the space it is being placed in would wrap these subtractions to ~65500 and paint the string
   // clean off the panel - which reads as "nothing was drawn" rather than as "drawn in the wrong place".  Park it
-  // at the edge instead.  A ScrollWidget with a too-long string never reaches here: it scrolls in _draw().
+  // at the SPAN's left edge instead: `offset` where the widget has a span, the panel edge where it has not.  The
+  // string then spills to the RIGHT, into the direction its own window clips and erases, instead of out of the
+  // span to the left - which, for a line a MOVE shifted off centre, spilled over a neighbour on the same row.
+  // A ScrollWidget with a too-long string never reaches here: it scrolls in _draw().
   switch (_config.align) {
     case WA_CENTER: {
       // Centred in the widget's own span when it has one, and on the screen when it has not.  A scroll brings a
@@ -149,7 +153,7 @@ uint16_t TextWidget::_realLeft(bool w_fb) {
       // clock is the one that has always done something else, centring on the screen and adding `left`.
       const uint16_t span  = (_width > 0) ? _width : realwidth;
       const uint16_t start = (_width > 0) ? offset : 0;
-      return (_textwidth >= span) ? 0 : (uint16_t)(start + (span - _textwidth) / 2);
+      return (_textwidth >= span) ? start : (uint16_t)(start + (span - _textwidth) / 2);
     }
     case WA_RIGHT: return ((uint32_t)_textwidth + offset >= realwidth)?0:(uint16_t)(realwidth - _textwidth - offset); break;
     default: return offset; break;
@@ -207,20 +211,24 @@ const char* scrollMark() {
   return mark;
 }
 
-ScrollWidget::ScrollWidget(ScrollConfig conf, uint16_t fgcolor, uint16_t bgcolor) {
-  init(conf, fgcolor, bgcolor);
+ScrollWidget::ScrollWidget(ScrollConfig conf, uint16_t fgcolor, uint16_t bgcolor, uint16_t buffsize) {
+  init(conf, fgcolor, bgcolor, buffsize);
 }
 
 ScrollWidget::~ScrollWidget() {
+  // The display has ONE single-scroll slot (dsp.setScrollId()), and a scroll line refuses to move while that slot names another widget.
+  // A widget destroyed while it holds the slot would leave it pointing at freed memory, and then nothing would scroll.
+  // it is cleared here rather than at the teardown sites, so every path   that frees widgets is covered.
+  if (dsp.getScrollId() == (void*)this) dsp.setScrollId(NULL);
   if (_fb)     { delete _fb;     _fb = nullptr; }
   if (_sep)    { free(_sep);     _sep = nullptr; }
   if (_window) { free(_window);  _window = nullptr; }
 }
 
-void ScrollWidget::init(ScrollConfig conf, uint16_t fgcolor, uint16_t bgcolor) {
-  TextWidget::init(conf.widget, conf.buffsize, conf.uppercase, fgcolor, bgcolor);
+void ScrollWidget::init(ScrollConfig conf, uint16_t fgcolor, uint16_t bgcolor, uint16_t buffsize) {
+  TextWidget::init(conf.widget, fgcolor, bgcolor, buffsize);
   if (_window) { free(_window); _window = nullptr; }
-  _x = conf.widget.left;
+  _x = conf.widget.offset;
   _startscrolldelay = conf.startscrolldelay;
   _scrolldelta = conf.scrolldelta;
   _scrolltime = conf.scrolltime;
@@ -277,7 +285,7 @@ void ScrollWidget::_refreshMark() {
 // is what lets a later, shorter text erase the row instead of only its own narrower box - without it the old line's
 // pixels survive around a dialog's shorter header, which no background bar covers on a panel that has none.
 void ScrollWidget::_spanPainted() {
-  _oldleft = _config.left;
+  _oldleft = _config.offset;
   _oldtextwidth = _width;
   _textPainted = true;
 }
@@ -314,7 +322,7 @@ void ScrollWidget::setText(const char* txt) {
   // Re-derive the window from the new text - but only while the line is on screen: a hidden line never
   // edits the panel, and its pixels were taken off when it hid.  _draw() syncs again on the way back.
   if (_active) _syncWindow();
-  _x = (_fb && _fb->ready())?0:_config.left;
+  _x = (_fb && _fb->ready())?0:_config.offset;
   if (dsp.getScrollId() == this) dsp.setScrollId(NULL);
   _scrolldelay = millis();
   // Recorded whether or not the widget is drawn, so a hidden widget still knows which string it holds and a
@@ -345,8 +353,8 @@ void ScrollWidget::setText(const char* txt) {
         _fb->display();
       #endif
       } else {
-        dsp.fillRect(_config.left,  _config.top, _width, _textheight, _bgcolor);
-        dsp.setCursor(_config.left, _config.top);
+        dsp.fillRect(_config.offset,  _config.top, _width, _textheight, _bgcolor);
+        dsp.setCursor(_config.offset, _config.top);
         snprintf(_window, _width / _charWidth * 4 + 5, "%s", _text); //TODO
         { uint16_t maxVis = _width / _charWidth + 1;   // the entering glyph is drawn and clipped, not dropped
           if (utf8_strlen(_window) > maxVis) {
@@ -354,7 +362,7 @@ void ScrollWidget::setText(const char* txt) {
             *cut = '\0';
           }
         }
-        dsp.setClipping({_config.left, _config.top, _width, _textheight});
+        dsp.setClipping({_config.offset, _config.top, _width, _textheight});
         dsp.resetUTF8();
         dsp.print(_window);
         dsp.clearClipping();
@@ -392,16 +400,68 @@ void ScrollWidget::setText(const char* txt) {
 }
 
 void ScrollWidget::setText(const char* txt, const char *format){
-  char buf[_buffsize];
-  snprintf(buf, _buffsize, format, txt);
+  char buf[WIDGET_BUFF_SIZE];
+  snprintf(buf, sizeof(buf), format, txt);
   setText(buf);
+}
+
+// The pixel width setText() would measure for this RAW string: preTextString() first, on a copy - it rewrites in
+// place and never lengthens the string (see TextWidget::setText()), so the candidate's own size is enough - then
+// codepoints at this line's char width.  Mirrors setText()'s formula on purpose: setTextLooped() and
+// _checkIsScrollNeeded() must never disagree about whether a line moves.  A probe that cannot be allocated answers
+// "already too wide", so nothing is added rather than the loop spinning on a measurement it cannot make.
+uint16_t ScrollWidget::_widthOf(const char* raw) {
+  if (!raw || !raw[0]) return 0;
+  const size_t n = strlen(raw) + 1;
+  char* probe = (char*)malloc(n);
+  if (!probe) return (uint16_t)(_width + 1);
+  strlcpy(probe, raw, n);
+  preTextString(probe, displayFont());
+  const uint16_t w = (uint16_t)(utf8_strlen(probe) * _charWidth);
+  free(probe);
+  return w;
+}
+
+// Set the text, repeating it until the line is wider than its span and therefore scrolls.  The screensaver's info
+// line is the caller: a still row on an otherwise idle panel reads as broken furniture, and padding it with blanks
+// was tried and looks like a fault, so the line repeats - "A · B · A · B" - joined with the mark this line already
+// joins its own parts with (_sep, resolved and measured by _setMark()), which is also the mark a scrolling cycle
+// prints at its wrap.  The ceiling is this line's own text buffer: setText() copies through
+// strlcpy(_text, txt, _buffsize - 1) and so keeps _buffsize - 2 characters, and a copy that would be truncated
+// would leave a line that stops scrolling again.  The widest span any panel asks for is MAX_WIDTH at text size 1
+// (460 px on the 480x320 TFT = 77 characters), so in practice the loop ends on the width, not on the buffer.
+// See plans/screensaver-line-loop.md.
+void ScrollWidget::setTextLooped(const char* txt) {
+  // A widget whose init() has not run has no buffers to measure with or write to; setText() bails there itself.
+  if (!txt || !txt[0] || !_text || _buffsize < 3 || !_charWidth || !_width) { setText(txt ? txt : ""); return; }
+  static char buf[WIDGET_BUFF_SIZE];   // one call at a time, on the display task - no heap churn per refresh
+  strlcpy(buf, txt, sizeof(buf));
+  const size_t one  = strlen(buf);              // what actually fits, not what was offered
+  const size_t join = _sep ? strlen(_sep) : 0;
+  const size_t cap  = (size_t)(_buffsize - 2);  // what setText() will keep
+  while (_widthOf(buf) <= _width) {
+    const size_t have = strlen(buf);
+    // The last copy that fits WHOLE: a truncated one would stop the line scrolling again.
+    if (have + join + one > cap || have + join + one >= sizeof(buf)) break;
+    if (join) strlcat(buf, _sep, sizeof(buf));
+    strlcat(buf, txt, sizeof(buf));
+  }
+  setText(buf);
+}
+
+// A scrolling line repaints through its own _draw(), which erases its span while it scrolls and its own text
+// rectangle otherwise, and clips every print.  TextWidget::_paint() cannot serve it: its erase is unclipped and
+// _textwidth here is the WHOLE string, so it uncovers the row - through a neighbour - where _draw() will never
+// print.  _active and _locked are _draw()'s own gates.
+void ScrollWidget::repaint() {
+  _draw();
 }
 
 void ScrollWidget::loop() {
   if(_locked) return;
   _refreshMark();
   if (!_doscroll || _config.textsize == 0 || (dsp.getScrollId() != NULL && dsp.getScrollId() != this)) return;
-  uint16_t fbl = _fb->ready()?0:_config.left;
+  uint16_t fbl = _fb->ready()?0:_config.offset;
   if (_checkDelay(_x == fbl ? _startscrolldelay : _scrolltime, _scrolldelay)) {
     _calcX();
     if (_active) _draw();
@@ -415,9 +475,11 @@ void ScrollWidget::_clear(){
       // display() happens in _draw() after text is rendered — not here
     #endif
   } else {
-    // No window on this path: erase the union of the last and the current text rectangle, never the room.
+    // No window on this path: erase the union of the last and the current rectangle, never the room.  A SCROLLING
+    // line owns its span, though, and its _textwidth is the WHOLE string - erasing that uncovers the row past the
+    // span, where _draw() never prints.
     const uint16_t left = _realLeft();
-    uint16_t from = left, to = (uint16_t)(left + _textwidth);
+    uint16_t from = left, to = (uint16_t)(left + (_doscroll ? _width : _textwidth));
     if (_textPainted) {
       from = min(_oldleft, from);
       to   = max((uint16_t)(_oldleft + _oldtextwidth), to);
@@ -432,7 +494,7 @@ void ScrollWidget::_draw() {
   _syncWindow();          // the text may have changed width since this window was last made
   _setTextParams();
   if (_doscroll) {
-    uint16_t fbl = (_fb && _fb->ready())?0:_config.left;
+    uint16_t fbl = (_fb && _fb->ready())?0:_config.offset;
     uint16_t _newx = fbl - _x;
     uint16_t charOffset = _newx / _charWidth;
     const char* _cursor = utf8_offset(_text, charOffset);
@@ -464,9 +526,9 @@ void ScrollWidget::_draw() {
       _fb->display();
     #endif
     } else {
-      dsp.fillRect(_config.left, _config.top, _width, _textheight, _bgcolor);
+      dsp.fillRect(_config.offset, _config.top, _width, _textheight, _bgcolor);
       dsp.setCursor(_x + hiddenChars * _charWidth, _config.top);
-      dsp.setClipping({_config.left, _config.top, _width, _textheight});
+      dsp.setClipping({_config.offset, _config.top, _width, _textheight});
       dsp.resetUTF8();
       dsp.print(_window);
       dsp.resetUTF8();
@@ -509,7 +571,7 @@ void ScrollWidget::_draw() {
 void ScrollWidget::_calcX() {
   if (!_doscroll || _config.textsize == 0) return;
   _x -= _scrolldelta;
-  uint16_t fbl = _fb->ready()?0:_config.left;
+  uint16_t fbl = _fb->ready()?0:_config.offset;
   if (-_x > _textwidth + _sepwidth - fbl) {
     _x = fbl;
     dsp.setScrollId(NULL);
@@ -535,8 +597,8 @@ bool ScrollWidget::_checkDelay(int m, uint32_t &tstamp) {
 // _realLeft(true) is where the text sits inside the span, so the window starts there.  Inside the new
 // window that same call returns 0, which is why nothing else in this class had to change.
 void ScrollWidget::_windowRect(uint16_t& x, uint16_t& w){
-  if (_doscroll || _textwidth == 0) { x = _config.left; w = _width; return; }
-  x = _config.left + _realLeft(true);
+  if (_doscroll || _textwidth == 0) { x = _config.offset; w = _width; return; }
+  x = _config.offset + _realLeft(true);
   w = _textwidth;
   if (w > _width) w = _width;                // cannot happen while the text fits, but never wider than the span
   if ((uint32_t)x + w > (uint32_t)dsp.width())   // a conf that reaches past the glass: stop at the edge
@@ -573,7 +635,7 @@ void ScrollWidget::_reset(){
   dsp.setScrollId(NULL);
   _scrolldelay = millis();
   _syncWindow(true);
-  _x = _fb && _fb->ready()?0:_config.left;
+  _x = _fb && _fb->ready()?0:_config.offset;
 }
 
 /************************
@@ -596,9 +658,9 @@ void SliderWidget::_drawslider() {
   uint16_t innerHeight = _height - _outlined * 2;
   uint32_t clampedValue = (_max == 0) ? 0 : min(_value, _max);
   uint16_t valwidth = (_max == 0) ? 0 : map(clampedValue, 0, _max, 0, innerWidth);
-  dsp.fillRect(_config.left + _outlined, _config.top + _outlined, innerWidth, innerHeight, _bgcolor);
+  dsp.fillRect(_config.offset + _outlined, _config.top + _outlined, innerWidth, innerHeight, _bgcolor);
   if (valwidth > 0) {
-    dsp.fillRect(_config.left + _outlined, _config.top + _outlined, valwidth, innerHeight, _fgcolor);
+    dsp.fillRect(_config.offset + _outlined, _config.top + _outlined, valwidth, innerHeight, _fgcolor);
   }
   _oldvalwidth = valwidth;
 }
@@ -607,13 +669,13 @@ void SliderWidget::_draw() {
   if(_locked) return;
   _clear();
   if(!_active) return;
-  if (_outlined) dsp.drawRect(_config.left, _config.top, _width, _height, _oucolor);
+  if (_outlined) dsp.drawRect(_config.offset, _config.top, _width, _height, _oucolor);
   _drawslider();
 }
 
 void SliderWidget::_clear() {
   _oldvalwidth = 0;
-  dsp.fillRect(_config.left, _config.top, _width, _height, _bgcolor);
+  dsp.fillRect(_config.offset, _config.top, _width, _height, _bgcolor);
 }
 void SliderWidget::_reset() {
   _oldvalwidth = 0;
@@ -640,6 +702,16 @@ static ClockFontSel _resolveClockFont(uint8_t sizeIndex){
   return sel;
 }
 
+// The size index a clock conf really means RIGHT NOW: the layout's own, one rung lower while the screensaver's
+// Smaller Clock option is on.  Index 0 is the built-in font and the floor - there is nothing below it - so a layout
+// that already asks for 0 is left alone.  Read in ClockWidget::init() rather than by the painters: the index is what
+// every measurement of the clock derives from, and a font swapped under measurements taken for another is a clock
+// printed into the wrong box.
+static uint8_t _clockConfSize(uint8_t confsize){
+  if (confsize > 0 && config.isScreensaver && config.store.screensaverClockSmaller) return (uint8_t)(confsize - 1);
+  return confsize;
+}
+
 inline GFXglyph *pgm_read_glyph_ptr(const GFXfont *gfxFont, uint8_t c) {
   return gfxFont->glyph + c;
 }
@@ -662,7 +734,7 @@ uint16_t _textWidth(const ClockFontSel& cf, const char *txt){
 /************************
       NUM WIDGET
  ************************/
-void NumWidget::init(WidgetConfig wconf, uint16_t buffsize, bool uppercase, uint16_t fgcolor, uint16_t bgcolor) {
+void NumWidget::init(WidgetConfig wconf, uint16_t fgcolor, uint16_t bgcolor, uint16_t buffsize) {
   Widget::init(wconf, fgcolor, bgcolor);
   _buffsize = buffsize;
   // This widget's own size index: numConf.textsize.
@@ -674,7 +746,6 @@ void NumWidget::init(WidgetConfig wconf, uint16_t buffsize, bool uppercase, uint
   _oldtext = (char *) malloc(sizeof(char) * _buffsize);
   memset(_oldtext, 0, _buffsize);
   _textwidth = _oldtextwidth = _oldleft = 0;
-  _uppercase = uppercase;
   // The PIXEL size (15/35/52/70, or the built-in cell for index 0), not the size index: it is the
   // built-in font's multiplier on the index-0 path and the erase offset on the GFXfont path, where
   // the ink sits ABOVE the cursor because every clock glyph has yOffset = -height.
@@ -713,27 +784,81 @@ void NumWidget::setText(const char* txt) {
 }
 
 void NumWidget::setText(int val, const char *format){
-  char buf[_buffsize];
-  snprintf(buf, _buffsize, format, val);
+  char buf[WIDGET_BUFF_SIZE];
+  snprintf(buf, sizeof(buf), format, val);
+  // With the glow on, the value is zero-filled to the field's width: the string itself is then the field, so a
+  // one-digit value is not a digit beside a blank glow cell and a centred layout stays centred.  Only plain
+  // digits are padded, so a format with a sign or a suffix is drawn as it is.
+  if (_padwidth > 1 && _glowOn()) {
+    const uint8_t n = (uint8_t)strlen(buf);
+    bool plain = (n > 0 && n < _padwidth);
+    for (uint8_t i = 0; plain && i < n; i++) if (buf[i] < '0' || buf[i] > '9') plain = false;
+    if (plain) {
+      const uint8_t pad = (uint8_t)(_padwidth - n);
+      memmove(buf + pad, buf, (size_t)n + 1);
+      memset(buf, '0', pad);
+    }
+  }
   setText(buf);
 }
 
+void NumWidget::setFieldMax(uint32_t maxval) {
+  // Only the WIDTH is kept, because the value itself is padded on the way in.  A uint16_t total is at most five
+  // digits, which is all _glowField holds, so a larger figure is clamped here rather than truncated later.  No
+  // repaint is forced: a changed width changes the padded string, and setText() sees that on its own.
+  uint8_t w = 1;
+  while (maxval > 9) { maxval /= 10; w++; }
+  _padwidth = (w > sizeof(_glowField) - 1) ? (uint8_t)(sizeof(_glowField) - 1) : w;
+}
+
+// The number's three glow tests: a clock font to take the glow glyph from, the stored Digits Glow setting, and a
+// backdrop that differs from the glow colour.  A one-bit palette sets digitbg == background, so no such panel can glow.
+bool NumWidget::_glowOn(){
+  return _cf.font != nullptr && editorOpt(config.store.digitsglow)
+         && config.theme.digitbg != config.theme.background;
+}
+
 void NumWidget::_getBounds() {
-  _textwidth= _textWidth(_cf, _text);
+  // One width, measured from the string.  The glow glyph carries the digit's own advance, so N glow cells are
+  // exactly N digit cells: there is nothing to reserve, and the digits sit on their glow cells.
+  _textwidth = _textWidth(_cf, _text);
+  uint8_t g = 0;
+  if (_glowOn() && _text[0]) {
+    const char ch = clockFontStyle().glowChar[0];
+    const uint8_t cells = (uint8_t)strlen(_text);   // "%d" only: one byte per digit
+    const uint8_t fit = (cells > sizeof(_glowField) - 1) ? (uint8_t)(sizeof(_glowField) - 1) : cells;
+    for (; g < fit; g++) _glowField[g] = ch;
+  }
+  _glowField[g] = '\0';
 }
 
 void NumWidget::_draw() {
-  // Index 0 has no clock font at all, and the number/volume page has always needed one: the guard
-  // was "TIME_SIZE < 2" when that was 0 and 1.
-  if(!_active || _cf.index == 0) return;
-  dsp.setTextSize(_cf.font==nullptr?_cf.textPx:1);
-  dsp.setFont(_cf.font);
-  dsp.setTextColor(_fgcolor, _bgcolor);
+  // Size index 0 draws with the SYSTEM font and its ink sits BELOW _config.top; a clock font's sits ABOVE it.
+  // This widget draws to the panel directly, so it needs none of the clock's framebuffer care.
   if(!_active) return;
-  dsp.setCursor(_realLeft(), _config.top);
-  dsp.print(_text);
+  const uint16_t x = _realLeft();
+  if (_glowOn() && _text[0]) {
+    // Glow cells first, then the digits over them.  Both prints use the ONE-argument
+    // setTextColor(), which is transparent: an opaque print paints each glyph's background and would erase
+    // the glow's unlit segments - the very thing the effect is.
+    dsp.fillRect(x, _config.top - _textheight, _textwidth, (uint16_t)(_textHeight(_cf) + 1), _bgcolor);
+    dsp.setTextSize(1);
+    dsp.setFont(_cf.font);
+    dsp.setTextColor(config.theme.digitbg);
+    dsp.setCursor(x, _config.top);
+    dsp.print(_glowField);
+    dsp.setTextColor(_fgcolor);
+    dsp.setCursor(x, _config.top);
+    dsp.print(_text);
+  } else {
+    dsp.setTextSize(_cf.font==nullptr?_cf.textPx:1);
+    dsp.setFont(_cf.font);
+    dsp.setTextColor(_fgcolor, _bgcolor);
+    dsp.setCursor(x, _config.top);
+    dsp.print(_text);
+  }
   // Recorded here as well as in setText(), because a page switch reaches this through setActive() alone.
-  _oldleft = _realLeft(); _oldtextwidth = _textwidth; _textPainted = true;
+  _oldleft = x; _oldtextwidth = _textwidth; _textPainted = true;
   strlcpy(_oldtext, _text, _buffsize);
   dsp.setFont();
 }
@@ -757,6 +882,7 @@ void ProgressWidget::init(WidgetConfig conf, ProgressConfig pconf, uint16_t fgco
   _scrolldelay = 0;    // read by _checkDelay() and not set anywhere else
   _pg = 0;
   _fieldX = 0;
+  _dotColor = fgcolor;   // one colour until setDotColor() asks for a second (see BOOT_DOT_COLOR)
   _oldLead = _oldDots = 0;
   _painted = false;
   _runway = (pconf.width > 2) ? (uint16_t)(pconf.width - 2) : 1;
@@ -765,7 +891,7 @@ void ProgressWidget::init(WidgetConfig conf, ProgressConfig pconf, uint16_t fgco
   // zeroes _width.
   const uint16_t bufbytes = (uint16_t)(strlen(_frameL) + _runway + strlen(_frameR)
                                        + _barwidth * (PROGRESS_DOT_BYTES - 1) + 1);
-  TextWidget::init(conf, bufbytes, false, fgcolor, bgcolor);
+  TextWidget::init(conf, fgcolor, bgcolor, bufbytes);
 }
 
 // Where the blob sits on this frame: it grows in at the speaker, slides right one column per frame, and then its head
@@ -782,7 +908,7 @@ void ProgressWidget::_blob(uint16_t& lead, uint16_t& dots) const {
 void ProgressWidget::_dotCell(uint16_t col, bool on) {
   const uint16_t x = (uint16_t)(_fieldX + col * _charWidth);
   if (on) {
-    dsp.setTextColor(_fgcolor, _bgcolor);
+    dsp.setTextColor(_dotColor, _bgcolor);
     dsp.setFont();
     dsp.setTextSize(_config.textsize);
     dsp.setCursor(x, _config.top);
@@ -815,6 +941,11 @@ void ProgressWidget::_draw() {
   _oldleft = _realLeft();
   dsp.fillRect(_realLeft(), _config.top, _textwidth, _textheight, _bgcolor);
   TextWidget::_draw();
+  // The blob is the one part of this line that may be a second colour, and the base paint just printed all of it in
+  // _fgcolor - so re-ink the blob's own cells.  Both paths put a column at _fieldX + c * _charWidth and the icon is
+  // written opaquely, so this is the same pixels in the other ink.  Skipped entirely when the colours agree.
+  if (_dotColor != _fgcolor)
+    for (uint16_t c = lead; c < (uint16_t)(lead + dots); c++) _dotCell(c, true);
   _oldLead = lead;
   _oldDots = dots;
   _painted = true;
@@ -865,8 +996,10 @@ void ClockWidget::init(WidgetConfig wconf, uint16_t fgcolor, uint16_t bgcolor){
   Widget::init(wconf, fgcolor, bgcolor);
   // clockConf.textsize is this clock's size index.  CLOCK_SIZE (the panel default dspfont.h derives
   // from DSP_HEIGHT) is only what the layout tooling fills a new layout with, so a conf that says
-  // nothing still gets the size that panel has always had.
-  _cf = _resolveClockFont(wconf.textsize);
+  // nothing still gets the size that panel has always had.  _clockConfSize() is where the screensaver's
+  // Smaller Clock option takes its rung off - everything below is derived from the answer, so nothing
+  // else has to know about the option.
+  _cf = _resolveClockFont(_clockConfSize(wconf.textsize));
   // The two shapes this clock draws with, built from the active style's ONE glow character.  A clock
   // glyph's advance is what the union glyph carries - makefont.py injects it at the digit width - so
   // <g><g>:<g><g> measures the clock exactly as "00:00" would, which is why it doubles as the width
@@ -893,9 +1026,24 @@ void ClockWidget::init(WidgetConfig wconf, uint16_t fgcolor, uint16_t bgcolor){
   // _space and _clockheight are all derived from it.
   _superfont = _cf.index;
   _space = (5*_superfont)/2; //magick
-  if(_fullclock){
-    _dateheight = _superfont<4?1:2;
-    _clockheight = _timeheight + _space + CHARHEIGHT * _dateheight;
+  // One row's worth of gap for this size, for the seconds' gap and for the date's own row.  Identical to
+  // _space for 1..4, and a whole built-in character row at index 0 - where _space is 0, which is what put the
+  // date ON the time's row there.  A clock font's ink sits above its cursor and the built-in cell's below it,
+  // so a full row is the honest gap at that size.
+  _rowgap = (_superfont == 0) ? (uint8_t)CHARHEIGHT : _space;
+  // The date's row height in built-in cells: one, or two at the 70 px size whose date is drawn larger.  Sized
+  // for every case rather than only inside the fullClock branch, because it is also what the compact box and
+  // the erase math read.
+  _dateheight = _superfont<4?1:2;
+  if(_cf.font == nullptr){
+    // Size index 0 draws with the SYSTEM font, and its cell sits BELOW the cursor where a clock glyph's sits
+    // ABOVE it.  The window therefore starts at the clock's own `top` (see _begin) and has to carry that cell
+    // itself, plus the date's row when fullClock is on - 8, or 16.  Sized for a clock font instead, only the
+    // digits' first row fell inside the window with fullClock off, which is what "a few pixels, all in the same
+    // row" was.
+    _clockheight = (uint8_t)(CHARHEIGHT * _cf.textPx * (1 + (_fullclock ? _dateheight : 0)));
+  } else if(_fullclock){
+    _clockheight = _timeheight + _rowgap + CHARHEIGHT * _dateheight;
   } else {
     _clockheight = _timeheight;
   }
@@ -907,10 +1055,27 @@ void ClockWidget::init(WidgetConfig wconf, uint16_t fgcolor, uint16_t bgcolor){
   #endif
 }
 
+// Rebuild the clock for the size the current screen state gives it, and do nothing when that is the size it is
+// already drawn at.  The Display calls this on the way into the screensaver and on the way back out, because the
+// option is not a layout change and init() is the only place a size is resolved.  The conf is an ARGUMENT, never
+// _config: moveTo()/moveBack() write _config.offset/top, so re-initing from it would take the moved position as the
+// widget's own and lose the layout's for the rest of the session.
+void ClockWidget::refreshSize(WidgetConfig conf){
+  if (_cf.index == _clockConfSize(conf.textsize)) return;
+  init(conf, _fgcolor, _bgcolor);
+}
+
 void ClockWidget::_begin(){
   #ifdef PSFBUFFER
     uint16_t bgColor = config.isScreensaver ? 0 : config.theme.background;
-    _fb->begin(&dsp, _clockleft, _config.top-_timeheight, _clockwidth, _clockheight+1, bgColor);
+    // How far ABOVE `_config.top` the window has to reach.  A clock font's glyph has yOffset = -height, so its
+    // ink is above its baseline and the whole _timeheight must be inside the window; the system font's ink is
+    // below its cursor, so at size index 0 there is nothing to reserve and the window starts AT `top`.  _top()
+    // reports the matching row base inside the window, so the two have to be read together.  Computed here
+    // rather than taken from _top() because on the very first call the buffer does not exist yet and _top()
+    // would still answer with the panel row.
+    const uint16_t topOff = (_cf.font == nullptr) ? 0 : _timeheight;
+    _fb->begin(&dsp, _clockleft, _config.top - topOff, _clockwidth, _clockheight+1, bgColor);
   #endif
 }
 
@@ -929,12 +1094,49 @@ uint16_t ClockWidget::_left(){
   if(_fb && _fb->ready()) return 0; else return _clockleft;
 }
 uint16_t ClockWidget::_top(){
-  if(_fb && _fb->ready()) return _timeheight; else return _config.top;
+  // The buffer row where this clock's ink begins.  A clock font's ink ENDS at _timeheight (the date row
+  // follows below it); the system font's BEGINS there, so at size index 0 the row base is the window's own row
+  // 0 - the system font would otherwise raise the time a whole cell.  Must agree with _begin()'s window.
+  if(_fb && _fb->ready()) return (_cf.font == nullptr) ? 0 : _timeheight;
+  else return _config.top;
+}
+
+// The date line the full clock prints, built in one place so the print and the box's geometry always agree:
+// at the compact sizes the DATE is usually the wider of the clock's two rows, and the box is sized for it.
+void ClockWidget::_dateString(){
+  sprintf(_tmp, "%2d %s %d", network.timeinfo.tm_mday, l10n_month(network.timeinfo.tm_mon), network.timeinfo.tm_year+1900);
+  strlcpy(_datebuf, _tmp, sizeof(_datebuf));
+}
+
+// Where a row of width rowW starts, for the sizes that align each of the clock's rows on its own.  The box is
+// the wider of the two rows, so an inset inside it IS that row's own alignment: at WA_CENTER both rows centre
+// on the same axis, at WA_RIGHT both end at the box's right edge, at WA_LEFT both start at its left.
+uint16_t ClockWidget::_rowLeft(uint16_t rowW){
+  if(!_compactClock() || rowW >= _clockwidth) return _left();
+  switch(_config.align){
+    case WA_CENTER: return (uint16_t)(_left() + (_clockwidth - rowW)/2);
+    case WA_RIGHT:  return (uint16_t)(_left() + (_clockwidth - rowW));
+    default:        return _left();
+  }
+}
+
+// Whether this clock glows at all: the stored setting AND a clock font to glow with.  The size index 0 case is
+// why it is a predicate rather than a repeated test - init() can only put the digit '0' in _glow/_glowSec when
+// there is no clock font (they exist to be MEASURED there: _timewidth and _secwidth are read off them), so
+// printing them would paint a literal "00:00" behind the time and "00" behind the seconds.  Size 0 therefore
+// draws no glow anywhere, and the WebUI does not offer the setting while the clock is that size (GETACTIVE in
+// netserver.cpp).  Three draws ask: the time's glow, the seconds' glow, and the colon's OFF colour - that last
+// one is deliberately the glow colour so the block stays unbroken while the colon blinks, which is exactly what
+// must not be punched into the background at size 0.  The theme's own colour test stays with each caller, which
+// is the only place that knows which pair is in question: clockbg vs background, or secondsbg vs background.
+bool ClockWidget::_glowOn(){
+  return _cf.font != nullptr && editorOpt(config.store.clockglow);
 }
 
 void ClockWidget::_getTimeBounds() {
   // _glow is built from this style's glow character in init(), so a live font switch rebuilds it
   // there exactly as a layout change does - nothing here reads a macro.
+  if(_fullclock) _dateString();     // the width below is a max() of the two rows, and the date is one of them
   _timewidth = _textWidth(_cf, _glow);
   uint8_t fs = _superfont>0?_superfont:_cf.textPx;
   // How wide the seconds block is.  With a seconds font in this style it is MEASURED from that
@@ -951,9 +1153,21 @@ void ClockWidget::_getTimeBounds() {
     _secwidth = (uint16_t)(CHARWIDTH * fs * 2);
   }
   rightside = _secwidth;
+  // The clock's own row, needed by the box below and by the print (which aligns the two rows separately at the
+  // compact sizes).  The one expression serves every size; only the compact ones read it.
+  _rowwidth = (uint16_t)(_timewidth + (_showSeconds ? _rowgap + _secwidth : 0));
   if(_fullclock){
-    rightside += _space*2+1; //2space+vline
-    _clockwidth = _timewidth+rightside;
+    if(_compactClock()){
+      // No divider column at these sizes, so the box is exactly the two rows' own needs: the time with the
+      // seconds after it, and the date below it.  The DATE can be the wider of the two (at index 0 it usually
+      // is), so the box takes whichever is wider - which is also what keeps a framebuffer window from clipping
+      // a row that aligning into a narrower box would push out of the window.
+      const uint16_t datew = (uint16_t)(utf8_strlen(_datebuf) * CHARWIDTH * _dateheight);
+      _clockwidth = (datew > _rowwidth) ? datew : _rowwidth;
+    } else {
+      rightside += _space*2+1; //2space+vline
+      _clockwidth = _timewidth+rightside;
+    }
   } else {
     // Anything to the right of the time is the layout's .seconds, not _superfont: with _superfont
     // now the size index it is non-zero for every panel that has a clock font, which would have
@@ -961,13 +1175,13 @@ void ClockWidget::_getTimeBounds() {
     if(!_showSeconds)
       _clockwidth = _timewidth;
     else
-      _clockwidth = _timewidth + _space + rightside;
+      _clockwidth = _timewidth + _rowgap + rightside;
   }
   switch(_config.align){
-    case WA_LEFT: _clockleft = _config.left; break;
-    case WA_RIGHT: _clockleft = dsp.width()-_clockwidth-_config.left; break;
+    case WA_LEFT: _clockleft = _config.offset; break;
+    case WA_RIGHT: _clockleft = dsp.width()-_clockwidth-_config.offset; break;
     default:
-      _clockleft = (dsp.width()/2 - _clockwidth/2)+_config.left;
+      _clockleft = (dsp.width()/2 - _clockwidth/2)+_config.offset;
       break;
   }
   _dotsleft = 0;
@@ -1001,8 +1215,16 @@ void ClockWidget::_printClock(bool force){
   uint16_t secondsBgColor = config.isScreensaver ? config.theme.secondsbgss : config.theme.secondsbg;
   uint16_t dowColor = config.isScreensaver ? config.theme.dowss : config.theme.dow;
   uint16_t dateColor = config.isScreensaver ? config.theme.datess : config.theme.date;
-  // _fb only exists on framebuffer (TFT) builds - guard it as getRealDsp() does
-  bool showFullClockOnScreensaver = !config.isScreensaver || (_fb && _fb->ready() && config.store.screensaverFullDateTime);
+  // _fb only exists on framebuffer (TFT) builds - guard it as getRealDsp() does.
+  // What the full clock's own column may draw HERE: the divider, the day and the date need the framebuffer - a
+  // one-bit panel's screensaver has no colours to draw them in - and at the two COMPACT sizes the screensaver
+  // shows the basic time, because fullClock there is the DATE on the MAIN screen, on a row of its own.
+  // `!config.isScreensaver` short-circuits first, so no part of this can reach the main screen.
+  bool showFullClockOnScreensaver = !config.isScreensaver
+                                    || (_fb && _fb->ready() && config.store.screensaverFullDateTime && !_compactClock());
+  // The seconds are the LAYOUT's feature, so on every panel they follow the screensaver's own setting.  They used
+  // to follow the full clock's permission as well, which is what asked for the framebuffer - so on an OLED,
+  // turning fullClock on took the seconds off the screensaver entirely (see the draw gate below).
   bool showSecondsOnScreensaver = !config.isScreensaver || config.store.screensaverFullDateTime;
   static bool wasScreensaver = false;
   if (wasScreensaver != config.isScreensaver) {
@@ -1013,20 +1235,27 @@ void ClockWidget::_printClock(bool force){
     #endif
   }
   if(force){
-    _clearClock();
+    _clearClock(false);   // wipe the buffer only: this path paints and displays the whole window below
     _getTimeBounds();
-    #ifndef DSP_OLED
-      if(config.store.clockglow) {
-        gfx.setTextColor(clockBgColor, bgColor);
-        gfx.setCursor(_left(), _top());
-        gfx.print(_glow);
-      }
-    #endif
+    // Where the time's row starts.  At the compact sizes each of the clock's two rows is aligned on its own, so
+    // the time's row starts at its own inset rather than at the box's edge (above those sizes _rowLeft is the
+    // box's edge, i.e. no change).  The glow goes HERE too, not at the box's edge: it fills the cells the digits
+    // sit in, so it has to start exactly where they do - and at the compact sizes the box is the wider of the two
+    // rows, so the box's edge sits up to the date's own width away from the digits.
+    uint16_t timeLeft = _rowLeft(_rowwidth);
+    // Theme-aware rather than panel-type-based: the glow is only meaningful where the clock's own
+    // background differs from what the digits sit on, so on a one-bit panel (clockbg == background)
+    // this is the same no-op the old !DSP_OLED guard gave, while a colour theme that sets them equal
+    // is now skipped too.  _glowOn() holds the other half of the rule: no clock font, no glow.
+    if(_glowOn() && clockBgColor != bgColor) {
+      gfx.setTextColor(clockBgColor, bgColor);
+      gfx.setCursor(timeLeft, _top());
+      gfx.print(_glow);
+    }
     if(clockInTitle)
       gfx.setTextColor(config.theme.meta, config.theme.metabg);
     else
       gfx.setTextColor(clockColor, bgColor);
-    uint16_t timeLeft = _left();
     const char* timeText = _timebuffer;
     if (config.store.clock12 && _timebuffer[0] == ' ') {
       timeLeft += _charWidth(_cf, (unsigned char)_glow[0]);
@@ -1037,7 +1266,12 @@ void ClockWidget::_printClock(bool force){
     if(_fullclock){
       // lines, date & dow
       _linesleft = _left()+_timewidth+_space;
-      if(showFullClockOnScreensaver){
+      // A compact clock has no divider column, so the divider and the day of week are dropped rather than
+      // squeezed into it - there is a single pixel for the line and an 8 px row for the DOW beside a 15 px
+      // time.  The date is the part worth keeping, and it takes the row below on its own.
+      // The size test STAYS here as well as in the flag: the flag's own one sits in the right-hand half of an
+      // `||` that the main screen short-circuits, so it only answers for the screensaver.
+      if(showFullClockOnScreensaver && !_compactClock()){
         gfx.drawFastVLine(_linesleft, _top()-_timeheight, _timeheight, config.theme.div);
         gfx.drawFastHLine(_linesleft, _top()-(_timeheight)/2, CHARWIDTH * _superfont * 2 + _space, config.theme.div);
         gfx.setFont();
@@ -1045,21 +1279,43 @@ void ClockWidget::_printClock(bool force){
         gfx.setCursor(_linesleft+_space+1, _top()-CHARHEIGHT * _superfont);
         gfx.setTextColor(dowColor, bgColor);
         gfx.print(l10n_dow(network.timeinfo.tm_wday));
-        sprintf(_tmp, "%2d %s %d", network.timeinfo.tm_mday, l10n_month(network.timeinfo.tm_mon), network.timeinfo.tm_year+1900);
-        strlcpy(_datebuf, _tmp, sizeof(_datebuf));
+      }
+      if(showFullClockOnScreensaver){
+        _dateString();
         uint16_t _datewidth = utf8_strlen(_datebuf) * CHARWIDTH*_dateheight;
+        gfx.setFont();      // the date is a built-in-font row, whatever face the time is drawn in
         gfx.setTextSize(_dateheight);
-        #if DSP_MODEL==DSP_GC9A01A
-          gfx.setCursor((dsp.width()-_datewidth)/2, _top() + _space);
-        #else
-          gfx.setCursor(_left()+_clockwidth-_datewidth, _top() + _space);
-        #endif
+        uint16_t dx;
+        if(_compactClock()){
+          // On its own row the date is aligned independently, by the same rule the time's row uses.
+          dx = _rowLeft(_datewidth);
+        } else {
+          #if DSP_MODEL==DSP_GC9A01A
+            dx = (dsp.width()-_datewidth)/2;
+          #else
+            dx = _left()+_clockwidth-_datewidth;
+          #endif
+        }
+        gfx.setCursor(dx, _top() + _rowgap);
         gfx.setTextColor(dateColor, bgColor);
         gfx.print(_datebuf);
       }
     }
   }
-  if ((_fullclock || _showSeconds) && (!_fullclock || showFullClockOnScreensaver) && (_fullclock || showSecondsOnScreensaver)) {
+  // What the seconds column is asked for.  At the two compact sizes there is no divider column for the
+  // seconds to sit in, so fullClock there means the DATE ALONE: they are drawn only when the layout asks
+  // for them with .seconds - and then _rowwidth already counts them, so the time's row, the alignment and
+  // the ink all agree.  Drawing them while the box left them out is exactly what made the centred time
+  // look off.  Above those sizes fullClock has always implied the seconds beside the divider, and it
+  // still does.
+  //
+  // WHERE they may draw is their OWN question, though: `showSecondsOnScreensaver` is the user's setting on the
+  // screensaver and true everywhere else, whatever fullClock says.  The gate used to AND in the full clock's
+  // screensaver permission when `_fullclock` was set, and that permission is the framebuffer's - so on a panel
+  // without one, a layout with fullClock on showed no seconds on the screensaver at all, while the same layout
+  // without fullClock showed them.  A seconds column is the layout's feature, not the date column's.
+  const bool drawSeconds = _showSeconds || (_fullclock && !_compactClock());
+  if (drawSeconds && showSecondsOnScreensaver) {
     // The seconds column.  With a seconds sibling in the style (10, 15, 21 or 28 px for size index
     // 1..4 - see secondsSizePx()) the digits are drawn with the CLOCK font, ink-top aligned with
     // where the built-in cell's ink has always begun; without a sibling, the built-in font at
@@ -1068,29 +1324,45 @@ void ClockWidget::_printClock(bool force){
     // CHARWIDTH * fs * 2, so a style can be swapped without moving the column.
     const GFXfont* secFont = secondsFontFor(_cf.index);
     uint8_t  secPx = secondsSizePx(_cf.index);
-    uint16_t sx = _fullclock ? _linesleft+_space+1 : _left()+_timewidth+_space;
-    uint16_t sy = _fullclock ? _top()-_timeheight   : _top()-_timeheight+_space;  // the ink top
+    // The x: the divider column's gap goes with the divider, so the compact sizes - and every size without
+    // fullClock - put the seconds one row-gap after the time, and only the divider sizes keep _linesleft.
+    uint16_t sx = (_fullclock && !_compactClock()) ? (uint16_t)(_linesleft+_space+1)
+                                                   : (uint16_t)(_rowLeft(_rowwidth)+_timewidth+_rowgap);
+    // The y is the ink top of the time's own row, at every size and in BOTH fullClock states.  With no clock font
+    // (size index 0) that row BEGINS at the cursor instead of ending there, so the seconds follow the time rather
+    // than being raised a row above it.  There used to be a `+ _space` on the no-fullClock path - a legacy nudge
+    // that dropped the seconds below the digits' first row (2 px at size 1, and 5/7/10 at 2..4), so the same clock
+    // looked a row different depending on whether the layout also asked for the date.  The seconds font's own
+    // glyphs carry yOffset = -height exactly as the clock's do, so this y IS their ink top.
+    uint16_t sy = (_cf.font == nullptr) ? _top() : (uint16_t)(_top()-_timeheight);  // the ink top
     if (secFont) {
       // Clear first: a GFXfont paints only the lit pixels, so a narrower glyph ("1" after "0")
       // leaves the previous character's pixels behind.  Then the glow, which fills the cells the
       // digits sit in - the same treatment clockbg gives the clock, in this style's own character.
       gfx.fillRect(sx, sy, _secwidth, secPx, bgColor);
-      #ifndef DSP_OLED
-        if (config.store.clockglow) {
-          gfx.setFont(secFont);
-          gfx.setTextSize(1);
-          gfx.setTextColor(secondsBgColor, bgColor);
-          gfx.setCursor(sx, sy + secPx);   // yOffset is -height: the cursor is a whole cell below
-          gfx.print(_glowSec);
-        }
-      #endif
+      if (_glowOn() && secondsBgColor != bgColor) {
+        gfx.setFont(secFont);
+        gfx.setTextSize(1);
+        gfx.setTextColor(secondsBgColor, bgColor);
+        gfx.setCursor(sx, sy + secPx);   // yOffset is -height: the cursor is a whole cell below
+        gfx.print(_glowSec);
+      }
       gfx.setFont(secFont);
       gfx.setTextSize(1);
       gfx.setTextColor(secondsColor, bgColor);
       gfx.setCursor(sx, sy + secPx);
     } else {
       gfx.setFont();
-      gfx.setTextSize(_superfont);
+      // _superfont is the size INDEX and is 0 with no clock font, where the built-in cell's multiplier is
+      // _cf.textPx - the same substitution _getTimeBounds() makes when it measures the seconds' width.
+      const uint8_t fs = _superfont > 0 ? _superfont : _cf.textPx;
+      // Clear the pair's cells first, exactly as the sibling branch above does and for the same reason: on a
+      // framebuffer a glyph paints only its LIT pixels (psFrameBuffer::write() renders through _writeGlyph(),
+      // which never touches a background), so "35" leaves behind every pixel "36" does not cover and the seconds
+      // smear into one another.  They are the one thing redrawn in place every second - the time and the date
+      // get the force path's clear.  _secwidth is exactly the pair's width and CHARHEIGHT * fs its height.
+      gfx.fillRect(sx, sy, _secwidth, (uint16_t)(CHARHEIGHT * fs), bgColor);
+      gfx.setTextSize(fs);
       gfx.setTextColor(secondsColor, bgColor);
       gfx.setCursor(sx, sy);
     }
@@ -1100,33 +1372,69 @@ void ClockWidget::_printClock(bool force){
   gfx.setTextSize(_cf.font==nullptr?_cf.textPx:1);
   gfx.setFont(_cf.font);
   #ifndef DSP_OLED
-    gfx.setTextColor(dots ? clockColor : (config.store.clockglow?clockBgColor:bgColor), bgColor);
+    gfx.setTextColor(dots ? clockColor : (_glowOn()?clockBgColor:bgColor), bgColor);
   #else
     if(clockInTitle) {
       gfx.setTextColor(dots ? config.theme.meta:config.theme.metabg, config.theme.metabg);
     }else{
-      gfx.setTextColor(dots ? clockColor:bgColor, bgColor);
+      gfx.setTextColor(dots ? clockColor : (_glowOn()?clockBgColor:bgColor), bgColor);
     }
   #endif
   dots=!dots;
-  gfx.setCursor(_left()+_dotsleft, _top());
+  // The colon is drawn here, apart from the time string, so it is the position that is easiest to forget: it
+  // follows the same row base as the time itself (identical to the box's edge above the compact sizes).
+  gfx.setCursor(_rowLeft(_rowwidth)+_dotsleft, _top());
   gfx.print(":");
   gfx.setFont();
   if(_fb && _fb->ready()) _fb->display();
 }
 
-void ClockWidget::_clearClock(){
+void ClockWidget::_clearClock(bool push){
   // Nothing to clear when the layout omits the clock: the geometry below is only valid after init(), so clearing
   // would fill a rectangle at indeterminate coordinates.
   if(!_present) return;
   uint16_t bgColor = config.isScreensaver ? 0 : config.theme.background;
   #ifdef PSFBUFFER
-    if(_fb && _fb->ready()) { _fb->clear(); return; }
+    if(_fb && _fb->ready()) {
+      // psFrameBuffer::clear() fills the PSRAM buffer ONLY - it never touches the panel - so an erase that means
+      // to take the clock off the screen has to display the wiped window itself.  That is `push`, true for every
+      // caller except _printClock()'s force path, which paints this same window and displays it a few lines
+      // later (and must not blit a wiped window first: that would show as a flash).
+      //
+      // Deliberately NOT gated on painted().  lock() calls _reset() first, which recreates the buffer and so
+      // clears _painted, so a guard here would skip exactly the erase that matters.  The OLED path below fills
+      // its rect unconditionally too, and the clock owns this rectangle for its whole life - so the two families
+      // behave identically.
+      // An erase that does not take is worth being able to read, so the diagnostic stays under WIDGET_DEBUG: it
+      // prints the window in PANEL coordinates, the framebuffer's own size, and whether the panel ever received
+      // it.  _left()/_top() are BUFFER coordinates - a clock at top 218 with a 70 px cell lives at panel y 148 -
+      // so it is this pair, not those, that matters when the rectangle is the suspect.
+      #ifdef WIDGET_DEBUG
+        FUNCTIONLOG("Widgets.debug", "erase=FRAMEBUFFER active=%d locked=%d win=%d,%d %dx%d fb=%dx%d push=%d painted=%d",
+                    (int)isActive(), (int)locked(), (int)_clockleft, (int)(_config.top - _timeheight),
+                    (int)_clockwidth, (int)(_clockheight + 1), (int)_fb->width(), (int)_fb->height(),
+                    (int)push, (int)_fb->painted());
+      #endif
+      _fb->clear();
+      if (push) _fb->display();
+      return;
+    }
   #endif
-  if (_cf.font == nullptr)
+  if (_cf.font == nullptr) {
+    #ifdef WIDGET_DEBUG
+      FUNCTIONLOG("Widgets.debug", "erase=fillRect active=%d locked=%d rect=%d,%d %ux%u",
+                  (int)isActive(), (int)locked(), (int)_left(), (int)_top(),
+                  (unsigned)(_clockwidth+1), (unsigned)(_clockheight+1));
+    #endif
     dsp.fillRect(_left(), _top(), _clockwidth+1, _clockheight+1, bgColor);
-  else
+  } else {
+    #ifdef WIDGET_DEBUG
+      FUNCTIONLOG("Widgets.debug", "erase=fillRect active=%d locked=%d rect=%d,%d %ux%u",
+                  (int)isActive(), (int)locked(), (int)_left(), (int)(_top()-_timeheight),
+                  (unsigned)(_clockwidth+2), (unsigned)(_clockheight+1));
+    #endif
     dsp.fillRect(_left(), _top()-_timeheight, _clockwidth+2, _clockheight+1, bgColor);
+  }
 }
 
 void ClockWidget::draw(){
@@ -1141,7 +1449,7 @@ void ClockWidget::_draw(){
 
 void ClockWidget::_reset(){
   if(!_present) return;   // omit-by-layout: _fb was never created, so there is nothing to reset
-  // _getTimeBounds() derives _clockleft/_clockwidth from _config.left and align, and _left() returns _clockleft on
+  // _getTimeBounds() derives _clockleft/_clockwidth from _config.offset and align, and _left() returns _clockleft on
   // non-framebuffer builds - so this has to run on every display, not just PSFBUFFER ones, or a moveTo()'s horizontal
   // component is silently ignored (the vertical one works, because _top() reads _config.top directly).
   _getTimeBounds();
@@ -1194,17 +1502,17 @@ void BitrateWidget::_draw(){
   if (!_active) return;
   _clear();
   if(!_active || (_format == BF_UNKNOWN && _bitrate==0)) return;
-  dsp.drawRect(_config.left, _config.top, _dimension, _dimension, _fgcolor);
-  dsp.fillRect(_config.left, _config.top + _dimension/2, _dimension, _dimension/2, _fgcolor);
+  dsp.drawRect(_config.offset, _config.top, _dimension, _dimension, _fgcolor);
+  dsp.fillRect(_config.offset, _config.top + _dimension/2, _dimension, _dimension/2, _fgcolor);
   dsp.setFont();
   dsp.setTextSize(_config.textsize);
   dsp.setTextColor(_fgcolor, _bgcolor);
   if (_bitrate == 0) _buf[0] = '\0'; // work-around so we get blank space on badge instead of 0 (for VS1053)
     else snprintf(_buf, 6, "%d", _bitrate);
-  dsp.setCursor(_config.left + _dimension/2 - _charWidth*strlen(_buf)/2 + 1, _config.top + _dimension/4 - _textheight/2+1);
+  dsp.setCursor(_config.offset + _dimension/2 - _charWidth*strlen(_buf)/2 + 1, _config.top + _dimension/4 - _textheight/2+1);
   dsp.print(_buf);
   dsp.setTextColor(_bgcolor, _fgcolor);
-  dsp.setCursor(_config.left + _dimension/2 - _charWidth*3/2 + 1, _config.top + _dimension - _dimension/4 - _textheight/2);
+  dsp.setCursor(_config.offset + _dimension/2 - _charWidth*3/2 + 1, _config.top + _dimension - _dimension/4 - _textheight/2);
   switch(_format){
     case BF_MP3:  dsp.print("MP3"); break;
     case BF_AAC:  dsp.print("AAC"); break;
@@ -1217,7 +1525,7 @@ void BitrateWidget::_draw(){
 }
 
 void BitrateWidget::_clear() {
-  dsp.fillRect(_config.left, _config.top, _dimension, _dimension, _bgcolor);
+  dsp.fillRect(_config.offset, _config.top, _dimension, _dimension, _bgcolor);
 }
 
 
@@ -1227,37 +1535,44 @@ void BitrateWidget::_clear() {
 void PlayListWidget::init(ScrollWidget* current){
   Widget::init({0, 0, 0, WA_LEFT}, 0, 0);
   _current = current;
-#if PLAYLIST_MODE_PAGED
+  // The mode is a runtime option now, so both geometries are computed and _paged remembers the one init() took.  It
+  // is re-taken whenever the widget is re-inited, which is what APPLYSTATE does.
+  _paged = editorOpt(config.store.playlistPages);
   _plItemHeight = playlistConf_ptr->widget.textsize*(CHARHEIGHT-1)+playlistConf_ptr->widget.textsize*4;
-  _plPlaylistTop = TFT_FRAMEWDT;
-  _plPlaylistBottom = dsp.height() - TFT_FRAMEWDT;
-  uint16_t available = _plPlaylistBottom - _plPlaylistTop;
-  _plPageSize = available / _plItemHeight;
-  if (_plPageSize < 1) _plPageSize = 1;
-  uint16_t totalHeight = _plPageSize * _plItemHeight;
-  _plYStart = _plPlaylistTop + (available - totalHeight) / 2;
-  _plPageStart = 0;
-  _plPrevItem = 0;
-#else
-  _plItemHeight = playlistConf_ptr->widget.textsize*(CHARHEIGHT-1)+playlistConf_ptr->widget.textsize*4;
-  _plTtemsCount = round((float)dsp.height()/_plItemHeight);
-  if(_plTtemsCount%2==0) _plTtemsCount++;
-  _plCurrentPos = _plTtemsCount/2;
-  _plYStart = (dsp.height() / 2 - _plItemHeight / 2) - _plItemHeight * (_plTtemsCount - 1) / 2 + playlistConf_ptr->widget.textsize*2;
-#endif
+  if (_paged) {
+    _plPlaylistTop = TFT_BORDER;
+    _plPlaylistBottom = dsp.height() - TFT_BORDER;
+    uint16_t available = _plPlaylistBottom - _plPlaylistTop;
+    _plPageSize = available / _plItemHeight;
+    if (_plPageSize < 1) _plPageSize = 1;
+    uint16_t totalHeight = _plPageSize * _plItemHeight;
+    _plYStart = _plPlaylistTop + (available - totalHeight) / 2;
+    _plPageStart = 0;
+    _plPrevItem = 0;
+  } else {
+    _plTtemsCount = round((float)dsp.height()/_plItemHeight);
+    if(_plTtemsCount%2==0) _plTtemsCount++;
+    _plCurrentPos = _plTtemsCount/2;
+    _plYStart = (dsp.height() / 2 - _plItemHeight / 2) - _plItemHeight * (_plTtemsCount - 1) / 2 + playlistConf_ptr->widget.textsize*2;
+  }
+}
+
+// currentTop() used to be two inline bodies behind one #if.  It is one function with both shapes now, because the
+// option is runtime: both of them position the playlist highlight, so it takes the branch init() took.
+uint16_t PlayListWidget::currentTop() {
+  if (!_paged) return _plYStart + _plCurrentPos * _plItemHeight;
+  if (_plPrevItem == 0) return _plYStart;
+  uint8_t slot = (_plPrevItem - _plPageStart);
+  return _plYStart + slot * _plItemHeight;
 }
 
 // --- Dispatcher ---
 void PlayListWidget::drawPlaylist(uint16_t currentItem) {
-#if PLAYLIST_MODE_PAGED
-  _drawPaged(currentItem);
-#else
-  _drawFade(currentItem);
-#endif
+  if (_paged) _drawPaged(currentItem);
+  else        _drawFade(currentItem);
 }
 
 // ==================== FADE MODE (original centered) ====================
-#if !PLAYLIST_MODE_PAGED
 
 uint8_t PlayListWidget::_fillPlMenu(int from, uint8_t count) {
   static char names[31][STATION_FIELD_LENGTH / 2];
@@ -1289,30 +1604,27 @@ void PlayListWidget::_printPLitem(uint8_t pos, const char* item){
   } else {
     uint8_t plColor = (abs(pos - _plCurrentPos)-1)>4?4:abs(pos - _plCurrentPos)-1;
     dsp.setTextColor(config.theme.playlist[plColor], config.theme.background);
-    dsp.setCursor(TFT_FRAMEWDT, _plYStart + pos * _plItemHeight);
+    dsp.setCursor(TFT_BORDER, _plYStart + pos * _plItemHeight);
     dsp.fillRect(0, _plYStart + pos * _plItemHeight - 1, dsp.width(), _plItemHeight - 2, config.theme.background);
     dsp.print(item);
   }
 }
 
-#endif // FADE MODE
-
 // ==================== PAGED MODE ====================
-#if PLAYLIST_MODE_PAGED
 
 void PlayListWidget::_printPLitemPaged(uint16_t stationId, uint16_t y, bool selected, const char* name){
   dsp.setTextSize(playlistConf_ptr->widget.textsize);
   uint8_t charH = CHARHEIGHT * playlistConf_ptr->widget.textsize;
   int16_t textY = y + ((int16_t)_plItemHeight - (int16_t)charH) / 2 + playlistConf_ptr->widget.textsize;
   if (selected) {
-    dsp.fillRect(0, y, dsp.width(), _plItemHeight, config.theme.plcurrentfill);
-    dsp.fillRect(TFT_FRAMEWDT, y, MAX_WIDTH, _plItemHeight, config.theme.plcurrentbg);
+    dsp.fillRect(0, y, dsp.width(), _plItemHeight, config.theme.plcurrentbg);
+    dsp.fillRect(TFT_BORDER, y, MAX_WIDTH, _plItemHeight, config.theme.plcurrentbg);
     dsp.setTextColor(config.theme.plcurrent, config.theme.plcurrentbg);
   } else {
     dsp.fillRect(0, y, dsp.width(), _plItemHeight, config.theme.background);
     dsp.setTextColor(config.theme.playlist[0], config.theme.background);
   }
-  dsp.setCursor(TFT_FRAMEWDT, textY);
+  dsp.setCursor(TFT_BORDER, textY);
   if (name && name[0] != '\0') {
     if (config.store.numplaylist) {
       char label[STATION_FIELD_LENGTH / 2 + 6];
@@ -1360,8 +1672,6 @@ void PlayListWidget::_drawPaged(uint16_t currentItem) {
     _printPLitemPaged(itemIndex, _plYStart + i * _plItemHeight, itemIndex == currentItem, names[i]);
   }
 }
-
-#endif // PAGED MODE
 
 
 #endif // #if DSP_MODEL!=DSP_DUMMY

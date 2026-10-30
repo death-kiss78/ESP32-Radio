@@ -1,12 +1,17 @@
 #ifndef netserver_h
 #define netserver_h
 
+// ESP-IDF's FLAG_ATTR macro-generates a constexpr operator| that clashes with this library's own, which
+// GCC reports as a spurious -Wattributes.  Scoped to the include so other attribute warnings stay visible.
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wattributes"
 #include <ESPAsyncWebServer.h>
+#pragma GCC diagnostic pop
 #include "../displays/widgets/widgetsconfig.h"
 
 // SDMANACTIVE is the file manager's own open/closed state, pushed so its page can follow the device without
 // polling; it is deliberately NOT the play mode (see the case in netserver.cpp).
-enum requestType_e : uint8_t  { PLAYLIST=1, STATION=2, STATIONNAME=3, ITEM=4, TITLE=5, VOLUME=6, NRSSI=7, BITRATE=8, MODE=9, EQUALIZER=10, BALANCE=11, PLAYLISTSAVED=12, GETINDEX=13, GETACTIVE=14, GETSYSTEM=15, GETSCREEN=16, GETLOCALE=17, GETWEATHER=18, GETCONTROLS=19, DSPON=20, SDPOS=21, SDLEN=22, SDSHUFFLE=23, SDINIT=24, GETPLAYERMODE=25, CHANGEMODE=26, SEARCH_DONE=27, SEARCH_FAILED=28, CURATED_INDEX_DONE=29, CURATED_PLAYLIST_DONE=30, CURATED_FAILED=31, GETMQTT=32, GETBATTERY=33, ARTWORK=34, PLAYLISTREADY=35, SDMANACTIVE=36 };
+enum requestType_e : uint8_t  { PLAYLIST=1, STATION=2, STATIONNAME=3, ITEM=4, TITLE=5, VOLUME=6, NRSSI=7, BITRATE=8, MODE=9, EQUALIZER=10, BALANCE=11, PLAYLISTSAVED=12, GETINDEX=13, GETACTIVE=14, GETSYSTEM=15, GETSCREEN=16, GETLOCALE=17, GETWEATHER=18, GETCONTROLS=19, DSPON=20, SDPOS=21, SDLEN=22, SDSHUFFLE=23, SDINIT=24, GETPLAYERMODE=25, CHANGEMODE=26, SEARCH_DONE=27, SEARCH_FAILED=28, CURATED_INDEX_DONE=29, CURATED_PLAYLIST_DONE=30, CURATED_FAILED=31, GETMQTT=32, GETBATTERY=33, ARTWORK=34, PLAYLISTREADY=35, SDMANACTIVE=36, PLVALIDATE=37, GETSCREENSAVER=38 };
 
 // PSRAM-backed static file cache entry
 struct CachedFile {
@@ -132,7 +137,6 @@ const char index_html[] PROGMEM = R"(
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <link rel="icon" type="image/png" href="icon.png">
-  <link rel="stylesheet" id="themeCSS" href="theme.css" type="text/css" />
   <link rel="stylesheet" id="styleCSS" href="style.css" type="text/css" />
   <script type="text/javascript" src="/variables.js"></script>
   <script type="text/javascript" src="/locale.js"></script>

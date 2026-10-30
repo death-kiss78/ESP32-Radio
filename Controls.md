@@ -209,13 +209,8 @@ curl "http://<radio-ip>/?stop"
 # Multiple commands (processed in URL order)
 curl "http://<radio-ip>/?volume=70&treble=4&bass=-2"
 
-# Sleep immediately and wake after 30 minutes
-curl "http://<radio-ip>/?sleep=30"
 # Sleep after 5 minutes, then wake after 30 minutes
 curl "http://<radio-ip>/?sleep=30&after=5"
-# Sleep after 5 minutes without a wake timer
-curl "http://<radio-ip>/?sleep&after=5"
-curl "http://<radio-ip>/?sleep=0&after=5"
 
 # Play a station by index
 curl "http://<radio-ip>/?play=3"
@@ -228,8 +223,6 @@ curl "http://<radio-ip>/?reboot=1"
 ```
 
 Note: the value matters - even for boolean toggles you need a value (for example ?toggle=1).
-`sleep` is the wake-up duration in minutes; `after` is the delay before entering sleep. `after` can be
-used without a positive `sleep` value to sleep without a wake timer.
 The server responds 200 with empty body on success, 404 on unrecognized commands.
 Some commands (like reset or clearfs) trigger a redirect to `/`.
 

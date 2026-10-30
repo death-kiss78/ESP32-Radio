@@ -11,6 +11,7 @@
 #include "netserver.h"
 #include "player.h"
 #include "utility.h"
+#include "playlistvalidator.h"
 
 namespace {
 
@@ -123,6 +124,17 @@ static bool handleAccountError(const char* info) {
   return false;
 }
 
+// Both audio libraries pass the raw HTTP status line ("HTTP/1.1 404 File Not Found") through
+// audio_showstreamtitle on any status above 310.  Returns the code, or 0 if this is not a status line.
+static int httpStatusCode(const char* info) {
+  if (!info || strncmp(info, "HTTP/", 5) != 0 || strlen(info) < 12) return 0;
+  const char* p = info + 9;
+  if (!isdigit(static_cast<unsigned char>(p[0])) ||
+      !isdigit(static_cast<unsigned char>(p[1])) ||
+      !isdigit(static_cast<unsigned char>(p[2]))) return 0;
+  return (p[0] - '0') * 100 + (p[1] - '0') * 10 + (p[2] - '0');
+}
+
 } // namespace
 
 AudioHandlers audioHandlers;
@@ -186,6 +198,16 @@ bool AudioHandlers::isPrintable(const char* info) const {
   return true;
 }
 
+/* --- The audio library's event channel --- */
+// AUDIO_INFO() is a callback and several messages change behaviour, so only the PRINT is gated here.
+// Level 2 = ERRORLOG, 1 = WARNINGLOG; anything not listed needs AUDIO_DEBUG or METADATA_LOG to print.
+static const struct { const char* phrase; uint8_t level; } kInfoSeverity[] = {
+  { "no decode progress",     2 },  // the watchdog closed a track that had stopped feeding
+  { "mp3 err ",               1 },  // the resync recovers
+  { "zero read:",             1 },
+  { "ring overrun prevented", 1 },  // a guard fired, the data was kept
+};
+
 void AudioHandlers::handleInfo(const char* info) {
   if (player.lockOutput) return;
 
@@ -193,7 +215,25 @@ void AudioHandlers::handleInfo(const char* info) {
     publishArtworkIfChanged(setArtworkUrl(metadataUrlBuffer));
   }
 
-  if (strcmp(info, "StreamTitle=''") != 0) FUNCTIONLOG("Audio.info", "%s", info);
+  if (strcmp(info, "StreamTitle=''") != 0) {
+    uint8_t level = 0;
+    for (const auto& entry : kInfoSeverity) {
+      if (strncmp(info, entry.phrase, strlen(entry.phrase)) == 0) { level = entry.level; break; }
+    }
+    if (level == 2) {
+      ERRORLOG("%s", info);
+    } else if (level == 1) {
+      WARNINGLOG("%s", info);
+    } else if (strncmp(info, "StreamTitle=", 12) == 0 || strncmp(info, "StreamUrl=", 10) == 0) {
+      #ifdef METADATA_LOG
+        FUNCTIONLOG("Metadata", "%s", info);
+      #endif
+    } else {
+      #ifdef AUDIO_DEBUG
+        FUNCTIONLOG("Audio.info", "%s", info);
+      #endif
+    }
+  }
   
 
   if (strstr(info, "format is mp3") != NULL) { config.setBitrateFormat(BF_MP3); display.putRequest(DBITRATE); }
@@ -219,14 +259,20 @@ void AudioHandlers::handleInfo(const char* info) {
 }
 
 void AudioHandlers::handleBitrate(const char* info) {
-  FUNCTIONLOG("Audio.bitrate", "%s", info);
+  #ifdef AUDIO_DEBUG
+    FUNCTIONLOG("Audio.bitrate", "%s", info);
+  #endif
   config.station.bitrate = atoi(info) / 1000;
   display.putRequest(DBITRATE);
   netserver.requestOnChange(BITRATE, 0);
 }
 
 void AudioHandlers::handleShowStation(const char* info) {
+  if (playlistValidator.active()) return;   // the validator owns the indicator while it sweeps
   bool printable = isPrintable(info) && (strlen(info) > 0);
+  #ifdef METADATA_LOG
+    FUNCTIONLOG("Metadata", "ICY station \"%s\"%s", info ? info : "", printable ? "" : " (not printable)");
+  #endif
   if (player.remoteStationName) {
     config.setStation(printable ? info : config.station.name);
     display.putRequest(NEWSTATION);
@@ -235,10 +281,19 @@ void AudioHandlers::handleShowStation(const char* info) {
 }
 
 void AudioHandlers::handleShowStreamTitle(const char* info) {
+  if (playlistValidator.active()) return;   // the validator owns the indicator while it sweeps
   if (handleAccountError(info)) return;  // error handled, don't display raw HTTP response as title
+  const int status = httpStatusCode(info);
+  if (status == 404 || status == 410) { player.noteFatalStream(); return; }
   #ifdef DEBUG_TITLES
     config.setTitle(DEBUG_TITLES);
     return;
+  #endif
+  #ifdef METADATA_LOG
+    // The refusal is the interesting half: a title that arrived and was not printable explains "no title on this
+    // station" without anyone having to guess about encoding.
+    if (!isPrintable(info)) FUNCTIONLOG("Metadata", "ICY title refused as non-printable: %.48s", info ? info : "");
+    else                    FUNCTIONLOG("Metadata", "ICY title \"%s\"", info);
   #endif
   if (!isPrintable(info) || info[0] == '\0') {
     // A stream with nothing to say shows its own name in the first line, and no second line survives it.
@@ -260,6 +315,7 @@ void AudioHandlers::handleShowStreamTitle(const char* info) {
 }
 
 void AudioHandlers::handleError(const char* info) {
+  if (playlistValidator.active()) return;   // a failed probe is expected, not an error to display
   player.setError(info);
 }
 
@@ -269,6 +325,7 @@ void AudioHandlers::handleIcyLogo(const char* info) {
 }
 
 void AudioHandlers::handleId3Artist(const char* info) {
+  if (playlistValidator.active()) return;
   if (config.getMode() == PM_SDCARD) {
     // SD: the artist names the station, never the second title line.
     if (isPrintable(info)) config.setStation(info);
@@ -281,6 +338,7 @@ void AudioHandlers::handleId3Artist(const char* info) {
 }
 
 void AudioHandlers::handleId3Album(const char* info) {
+  if (playlistValidator.active()) return;
   if (player.lockOutput) return;
   if (!isPrintable(info)) return;
   if (_second.artist && _second.text[0]) return;  // artist outranks album for the current item
@@ -288,6 +346,7 @@ void AudioHandlers::handleId3Album(const char* info) {
 }
 
 void AudioHandlers::handleId3Title(const char* info) {
+  if (playlistValidator.active()) return;
   if (player.lockOutput) return;
   if (isPrintable(info)) _putHalf(_song, info, META_ID3, false);
 }
@@ -299,12 +358,17 @@ void AudioHandlers::handleBeginSdRead() {
 
 void AudioHandlers::handleId3Data(const char* info) {
   if (player.lockOutput) return;
-  FUNCTIONLOG("Audio.id3", "%s", info);
+  #ifdef METADATA_LOG
+    FUNCTIONLOG("Metadata", "%s", info);
+  #else
+    (void)info;
+  #endif
 }
 
 void AudioHandlers::handleEofMp3(const char* info) {
   (void)info;
   config.sdResumePos = 0;
+  player.autoAdvance = true;  // EOF auto-advance: mute must survive this track change
   player.next();
 }
 
