@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <link rel="icon" type="image/png" href="./images/icon.png">
     <link rel="apple-touch-icon" href="./images/icon.png">
-    <title>ESP32 Radio - Web Installer</title>
+    <title>ehRadio - Web Installer</title>
     <script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module"></script>
     <style>
         body {
@@ -159,7 +159,7 @@
 <body>
     <div class="container">
         <div class="header">
-            <a href="https://github.com/death-kiss78/ESP32-Radio" target="_blank"><img src="./images/logo-color.png" alt="ESP32-Radio" style="height: 160px;"></a>
+            <a href="https://github.com/trip5/ehRadio" target="_blank"><img src="./images/logo-color.png" alt="ehRadio" style="height: 160px;"></a>
             <p id="release-version">Release: Loading...</p>
             <p>ESP Web Tool</p>
         </div>
@@ -181,6 +181,7 @@
 
             <h3>Improv Mode</h3>
             <p>With this, you can set up Wi-fi configuration and visit the device's WebUI.</p>
+            <p>You will need to use a Chrome-based browser (Edge, Brave) - not Firefox or Safari.</p>
 
             <p>For most devices, you can use Improv mode immediately after flashing. But you may need to reset the device (power-off, power-on).</p>
             <p>If yours is special, you will need to reset normally and click 'Connect' again.</p>
@@ -202,23 +203,23 @@
 
             <h3>Special Notes</h3>
             <p>These firmwares are generally meant for pre-built radios. They must match the device's hardware configuration. Check the
-                    <a href="https://github.com/death-kiss78/ESP32-Radio/releases" target="_blank" style="color: #667eea;">Releases</a>.</p>
+                    <a href="https://github.com/trip5/ehRadio/releases" target="_blank" style="color: #667eea;">Releases</a>.</p>
             <p>Please note that during first-boot after flashing, the device will take some time to format LittleFS.  Be patient.</p>
         </div>
     </div>
 
     <div class="footer" style="background: #1a1a1a; color: white; text-align: center; padding: 30px 40px; margin-top: 0; border-top: 1px solid #333;">
         <!-- <p>Forked by XYZ from</p> -->
-        <a href="https://github.com/death-kiss78" target="_blank">
-            <img src="https://raw.githubusercontent.com/death-kiss78/" alt="DeaTh KiSS">
+        <a href="https://github.com/trip5" target="_blank">
+            <img src="https://raw.githubusercontent.com/trip5/trip5/main/images/Trip5_outline.svg" alt="Trip5">
         </a>
         <p style="margin: 10px 0 5px; color: #ccc;">Made with <a href="https://esphome.github.io/esp-web-tools/" target="_blank" style="color: #667eea;">ESP Web Tools</a></p>
     </div>
 
     <script>
         // Configuration
-        const GITHUB_OWNER = 'death-kiss78';
-        const REPO_NAME = 'ESP32-Radio';
+        const GITHUB_OWNER = 'trip5';
+        const REPO_NAME = 'ehRadio';
         
         // Global variables
         let firmwareData = null;

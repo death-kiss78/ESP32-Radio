@@ -2414,8 +2414,8 @@ function generatePlatformioIni() {
 
   // Get firmware name for the env
   var firmwareNameCtrl = document.querySelector('[data-define="FIRMWARE_NAME"]');
-  var firmwareName = firmwareNameCtrl ? firmwareNameCtrl.value : 'my_esp32_radio';
-  var envName = firmwareName.toLowerCase().replace(/[^a-z0-9_]/g, '_').replace(/^_+|_+$/g, '') || 'my_esp32_radio';
+  var firmwareName = firmwareNameCtrl ? firmwareNameCtrl.value : 'my_ehradio';
+  var envName = firmwareName.toLowerCase().replace(/[^a-z0-9_]/g, '_').replace(/^_+|_+$/g, '') || 'my_ehradio';
 
   // Compute shareable URL to embed in the platformio.ini header comment
   var pioState = serializeState();

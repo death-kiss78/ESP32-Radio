@@ -28,6 +28,24 @@ Grouped (not one-by-one deep explained) areas:
 
 ---
 
+## The Two Audio Libraries (read together)
+
+`src/libraries/I2S_Audio/` and `src/libraries/VS1053_Audio/` are separate backends, selected by whether `VS1053_CS`
+is defined. They share their defect classes, and the same bug has repeatedly appeared in both - the fixes in the two
+`*-frankenstein-surgery-notes.md` files land under the same dates (`2026.10.11`, `2026-10-21`, `2026.10.24`).
+
+- **A fix in one library is a question about the other.** Check the counterpart before closing the issue, and record
+  whether it needed the same change or was already correct.
+- **The VS1053 board tends to surface these first** - hardware decoder, DREQ-gated SPI feed, a shallower graft and
+  readable per-track counters - and its notes file carries the longer record (fixes from 2026-07 on).
+- **The I2S library is often the correct reference** for what the VS1053 graft lost, and sometimes the reverse: its
+  `2026.10.24` tail-of-file note predicted on the record that a VS1053 unit stopping at a track end would be the next
+  thing to look at, and that is what happened.
+- Anything a fix teaches about end-of-stream accounting, per-track state or the reader/consumer split applies to both;
+  the histories live in the two notes files, which are the place to look before theorising.
+
+---
+
 ## Fast Architecture Overview
 
 ### Build-time chain
@@ -52,8 +70,8 @@ Grouped (not one-by-one deep explained) areas:
 
 ### Logging chain (serial + telnet)
 - `src/core/logging.h` / `src/core/logging.cpp` define the common log path. Call sites keep the uppercase macros, which
-  now wrap function-backed implementations (`serialLog`, `functionLog`, `bootLog`, `bootLogX`, `errorLog`, `serialLogDot`,
-  `audioLog`) so formatting happens in one backend.
+  now wrap function-backed implementations (`serialLog`, `functionLog`, `bootLog`, `bootLogX`, `errorLog`, `warningLog`,
+  `serialLogDot`, `audioLog`) so formatting happens in one backend.
 - Core macros:
   - `SERIALLOG(...)`: writes one formatted line to both serial and telnet sinks.
   - `SERIALLOGX(...)`: writes one formatted line to both serial and telnet sinks without line-ending (useful after
@@ -64,6 +82,44 @@ Grouped (not one-by-one deep explained) areas:
   - `ERRORLOG(...)`: error-category wrapper.
   - `SERIALLOGDOT()`: progress-dot helper for long-running loops.
   - `AUDIOLOG(category, ...)`: callback-safe logging wrapper for stack-sensitive audio callback contexts.
+  - `WARNINGLOG(...)`: warning-category wrapper (`[Warning]`), the middle level - see the two-level rule below.
+  - `WARNINGS_LOG` is the switch for that level, and it is a plain flag like every other debug switch here:
+    `#ifdef WARNINGS_LOG` / `#ifndef WARNINGS_LOG`, listed in `options.h` inside the `ALL_DEBUG_LOGS` block. So
+    `[Warning]` lines exist only in a debug build, which is the point: a shipped log carries `[ERROR]` and nothing
+    else, and whoever needs the warnings defines `WARNINGS_LOG` in `myoptions.h` (or `ALL_DEBUG_LOGS`). Two traps.
+    (1) A flag is on whether it is 1 or 0, so `#define WARNINGS_LOG 0` *enables* it - the way to leave it off is
+    simply not to define it. (2) The test sits in the body of `warningLog()` in `logging.cpp`, not around the macro in
+    `logging.h`: that header is included by translation units that cannot see `options.h`, where the flag would be
+    undefined and warnings would vanish from exactly those files in a debug build too - the trap
+    `ESPFILEUPDATER_VERBOSE` fell into. Declared unconditionally, one signature everywhere, one place to turn it on.
+- **Two levels, and what each one promises the reader.** `[ERROR]` is what is broken and unhandled: data lost, a mount
+  failed, a task could not be created, heap corruption detected. `[Warning]` is what the code already handled: a
+  fallback taken (`SD card not inserted` -> web mode), a retry running (`Recovery restarts spent`), a limit reached
+  (playlist or SD index full), or an event expected on this path (`Main loop stalled` during an ID3v2 tag read, a
+  dropped display request). The test for a site is in its own message text: "failed", "cannot" or "could not" with no
+  fallback behind it is an ERROR; anything self-healing is a Warning. Warnings stay on in every build, because the level
+  only helps if a tester can tell the two apart in the log they paste. Tester rule: a `[Warning]` is worth reporting
+  when it repeats or when the audio misbehaves with it; an `[ERROR]` is always worth reporting.
+  **Demoting a site to `Warning` therefore also takes it out of a normal build's log**, because warnings are a debug
+  switch. That is deliberate for an event the code handled, and wrong for anything the user has to act on - so a
+  demotion has to hold up on both counts: "the code dealt with it" AND "nobody needs to see it in a shipped log".
+- **`[Audio.info]` is not a log stream, and that is why it was never gated.** `AUDIO_INFO()` in the audio libraries is
+  `sprintf()` plus a call to the weak `audio_info()` callback - the library's event channel into the sketch.
+  `AudioHandlers::handleInfo()` is the consumer, and several messages change behaviour there: the codec report sets the
+  bitrate format, `BitRate:` sets the station bitrate and pushes it to the WebUI, `stream ready` clears the connecting
+  placeholder, `skip metadata` restores the station name. The message is therefore never suppressed - only the print, in
+  the handler. Three dispositions: the library's fault lines go through a `kInfoSeverity[]` table (`no decode progress`
+  -> `ERRORLOG`; `mp3 err `, `zero read:`, `ring overrun prevented` -> `WARNINGLOG`); metadata has its own switch
+  (`METADATA_LOG`, a flag, off by default, `[Metadata]` category) covering the ID3 fields in `handleId3Data()`, the ICY title in
+  `handleShowStreamTitle()` - including a title refused as non-printable, which is the answer to "no title on this
+  station" - the ICY station name in `handleShowStation()`, and the raw `StreamTitle=`/`StreamUrl=` copies that arrive
+  through `handleInfo()`; everything else is per-track chatter printed only under `AUDIO_DEBUG`. A new fault line has to
+  be added to that table to be heard.
+- **Two lines are gated at the source as well**, because they run on a timer rather than once per event: the `track 10s`
+  ring arithmetic in `Audio::loop()` sits inside `#ifdef AUDIO_DEBUG` so its sprintf never runs in a quiet build, and
+  the two `[SD]` trace lines (`connecttoFS`, `play pos ... card n/m`) are behind `SD_PLAY_TRACE_MS`, which now defaults
+  to **0** - set it to e.g. 30000 in `myoptions.h` for a soak, since that pair is what says whether the card reader or
+  the decoder stopped. `CONFIG_KEY_DEBUG` does the same for the `[Config.key]` value dumps in `config.h`.
   - `BOOTLOG_TIME` (defaulted in `options.h` under `ALL_DEBUG_LOGS`, set in `myoptions.h` for debug builds) makes every
     `BOOTLOG` line carry the time since boot, zero-padded to five digits, between the 16-character category field and
     the message: `[BOOT]          00600ms: <message>`. `logging.cpp` must include `options.h` or the `#ifdef` is false
@@ -102,51 +158,6 @@ Grouped (not one-by-one deep explained) areas:
     `Serial.setTxTimeoutMs()` under `#if ARDUINO_USB_CDC_ON_BOOT`. Not zero: at zero the first failed ring-buffer send
     gives up immediately and `tries` hits zero, so a burst such as the 40-line config dump comes out truncated rather
     than merely bounded. Measured cost before the change: about 4.6 ms per line, 186 ms for the config dump alone.
-  - **File logging (`SAVE_LOGS_TO_FS`, live in `logging.h`/`logging.cpp`; it began as `logring.*`, which is why the
-    identifiers still read `logRing*`).** Switched on by an uncommented `#define SAVE_LOGS_TO_FS` in `myoptions.h` (as
-    in `builds/trip5/myoptions.h`). Every test is `#ifdef`, so the define needs no value - and, for the same reason,
-    `#define SAVE_LOGS_TO_FS 0` would still switch it on: to turn it off, comment the line out. When on,
-    `emitLogMessage()` takes **both** of its branches to `logRingWrite(text, complete, critical)`: a complete line goes
-    straight out, and a **fragment** - the `X` variants' partial text, and the progress dots now that `serialLogDot()`
-    routes through the funnel - accumulates in a pending buffer and rides out joined to the line that closes the run, so
-    the file reads the way serial did (`netserver.begin....done`). The run carries the stamp taken when its first
-    fragment arrived, so the timestamp marks when the work started rather than when the newline came. Lines whose
-    category is `ERROR`, `Network`, `Player` or `Services` flush to flash immediately (the last lines before a reboot
-    are the ones that explain it); everything else rides a RAM ring (16 KB in PSRAM, 2 KB of internal heap when there is
-    none) drained by `logRingFlush()` from `loop()`, outside the loop's stage attribution, and written through a static
-    internal-DRAM staging buffer because a flash write runs with the cache disabled and must never be handed a PSRAM
-    pointer. `FS_REQUIRED_FREE_SPACE` (options.h) is the ring's reserve as well as netserver's download floor: the ten
-    files share `total - reserve`, so each caps at about 335 KB here and the ring as a whole is the filesystem minus
-    that reserve - 440 KB/h with `ALL_DEBUG_LOGS` and `CORE_MONITOR` (86% of it Core Monitor) is about 7.5 h of history.
-    One `File::write()` can trigger an uninterruptible sector erase, so `Max Main Loop Time` reads ~118 ms with the ring
-    on against ~3 ms without, and the 15 ms flush budget cannot preempt the single write it is inside. Serving is
-    snapshot-based: `logRingSnapshot()` fixes the file list and each size for one request (so anything logged during the
-    download cannot shift an offset) and `logRingReadAt()` re-reads it file by file, keeping its `File` open across
-    chunk callbacks rather than open/seek/close per chunk - 730 opens is what made a 1.1 MB `/log` take 21 s to load and
-    to save. While such a handle is open `flush()` writes nothing at all, because littlefs can relocate the tail of the
-    newest file when it compacts a directory; the RAM ring absorbs the pause, and a request that stops reading is
-    treated as abandoned after `SERVE_IDLE_MS` (5 s) and its handle dropped. Layout, rotation, sizing, the reboot-safe
-    `/logs/idx` state and the `/log` reader are documented here rather than in a page of their own: the feature is
-    normally built out, so it does not warrant one.
-  - The ring has two URIs. `/log` (and its `/log.txt` spelling, which is what curls and old bookmarks carry) streams the
-    whole ring as one text file, chunked, with the layout snapshotted per request; `/logclear` wipes it and answers with
-    how much was there. Clearing is a URI of its own rather than `?clear=1` on the reader, so that a bookmark, a history
-    entry or a reload button can never destroy the log whose name it carries.
-  - **One owner per file handle, and one lock (`_ioLock`) for the ring's flash I/O.** The download used to keep its
-    `File` open between chunk callbacks while `flush()`, `logRingSnapshot()` and `logRingClear()` closed that handle from
-    other tasks, so a seek landed on a handle littlefs no longer had open and the device aborted with
-    `assert failed: lfs_file_seek lfs.c:... (lfs_mlist_isopen(...))`. `logRingReadAt()` opens, seeks, reads and closes
-    inside the one call, and every flash touch in the ring (`flush()`, `currentSize()`, `ensureFile()`, `saveIdx()`, the
-    callers of `rotate()`, `logRingSnapshot()`, `logRingClear()`, `logRingInit()`) runs under `_ioLock` - a real mutex,
-    never a critical section, because a flash write must not run with interrupts disabled. `flush()` takes it with a
-    zero-tick try and skips when busy (two flushes could interleave their appends and each advance `_cur`), and never
-    rotates while a download is live, because a rotate deletes the oldest slot a snapshot starts from.
-  - One download at a time: while `logRingServeBusy()` is true a second `/log` gets 409, and `/logclear` refuses rather
-    than wiping files out from under it. A download that reads nothing for `SERVE_IDLE_MS` (5 s) counts as abandoned, so
-    a client that walks away cannot lock the ring closed. `logRingClear()` returns the bytes it removed, so the
-    confirmation text no longer snapshots first (that snapshot rewrote a live download's layout). `logRingShutdown()`
-    (called by the danger-zone `format` command before `LittleFS.format()`) flushes and disables the ring for the rest
-    of the boot.
 - Contract detail:
   - `Telnet::printf(...)` is telnet-only transport and no longer mirrors to serial.
   - Normal logs no longer route through `Telnet::printf(...)`; `logging.cpp` uses `Telnet::logLine(...)` /
@@ -155,10 +166,30 @@ Grouped (not one-by-one deep explained) areas:
     behavior (for example client-targeted telnet responses and OTA progress streaming).
 
 ### Crash report (the core dump, read back on the next boot)
-- A panic cannot be written into the ring (nothing of ours runs after one, and the ring lives in PSRAM), but a core dump
+- A panic cannot be logged by us (nothing of ours runs after one), but a core dump
   is recorded on every crash: `CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y` with `DATA_FORMAT_ELF=y` is built into the
   framework's prebuilt ESP32-S3 libraries, and every partition table in `builds/partitions/` ends with a 64 KB
   `coredump` partition. `src/core/crashreport.h` / `crashreport.cpp` only read it back.
+- **The crash black box, `src/core/coredump.cpp` / `.h`.** `crashDumpReport()` prints the dump and leaves it in place;
+  `coredump::service()` is called from `loop()`, not `setup()` - a fixed call point in `setup()` always stamped the file
+  `clock unverified`, because SNTP answers after `setup()` has moved on. `service()` archives as soon as the clock is
+  usable, or without one after `CLOCK_WAIT_MS` (45 s), which is also the offline SD case where NTP never comes. It
+  writes `/data/coredump.N` and erases the partition only after that write succeeds; three failed writes give up until
+  the next boot, which then simply reports and retries. Nine files are kept: the numbers only grow, and the tenth write
+  deletes the lowest-numbered first; if that delete fails the write is abandoned rather than letting the ring grow.
+  **A version change clears the ring** (`coredump::clear()`, called from `checkLittleFSandVer()` when the stored
+  `ehradio.ver` differs from `RADIOVERSION`): a crash log is only meaningful against the firmware that produced it. A
+  *pending* dump is not discarded though - it is archived into the fresh ring, with its own `elf sha256` naming the build
+  that crashed. Dev builds reusing one `RADIOVERSION` do not trigger the clear, which is the accepted cost.
+  A file is one header line - the timestamp with `(clock verified)` or `clock unverified`, the reset reason this boot
+  started for, the mode and station the crashed boot was on, and the uptime at archive - then the same lines from
+  `emitReport()` (one emitter in `crashreport.cpp` feeds both, so they cannot drift), then two blank lines. The crashed
+  build is named by the `elf sha256` in the body, not by the header, because a header md5 would be the *current* build.
+  `/coredump` in `handleNotFound` returns every kept file as one `text/plain` stream built by `coredump::buildAllText()`,
+  whose own top line carries `RADIOVERSION`, the firmware name and the app md5 - so netserver never learns a file name.
+  There is no `COREDUMP_KEEP_DUMP` any more: keeping the dump made every boot re-archive the same crash, so nine boots
+  recycled the whole ring with copies of one fault. `esp_core_dump_summary_t` carries no core id (only `exc_tcb`,
+  `exc_task`, `exc_pc`, `exc_bt_info`), so the core is implied by the task name and the boot banner's core layout.
 - `crashDumpAvailable()` is `esp_core_dump_image_check() == ESP_OK`; `crashDumpReport()` calls
   `esp_core_dump_get_summary()` and BOOTLOGs the crashing task, `exc_pc`, the exception cause and vaddr, up to 16
   on-device backtrace PCs, and the crashing app's ELF SHA256 - all either paste-ready for
@@ -168,8 +199,7 @@ Grouped (not one-by-one deep explained) areas:
   both it and `CONFIG_ESP_COREDUMP_*` must hold or the file compiles to empty stubs.
 - `main.cpp` calls it right after the 1 second pre-log delay, inside the same `CORE_DEBUG_LEVEL`/`ALL_DEBUG_LOGS` guard,
   and that delay also fires when a dump is waiting (after a crash `esp_reset_reason()` is `ESP_RST_PANIC` or a WDT
-  reason, not `ESP_RST_POWERON`). Because the block runs before `logRingInit()`, its lines sit in the RAM ring and are
-  appended once the ring is ready - the crash lands at the end of the log, after the lines that led up to it.
+  reason, not `ESP_RST_POWERON`). The block runs early in `setup()`, so the crash is logged before the rest of the boot.
 - The summary API exists only in the ELF core-dump build of the IDF libraries, so `crashreport.cpp` is guarded by `#if
   defined(COREDUMP_SUMMARY_AT_BOOT) && CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH && CONFIG_ESP_COREDUMP_DATA_FORMAT_ELF`; both
   sdkconfig macros are 1 here, and the map file confirms `esp_core_dump_get_summary` links in from
@@ -210,9 +240,11 @@ Grouped (not one-by-one deep explained) areas:
 - Canonical fallback defaults and compile flags.
 - Includes `myoptions.h` when present.
 - **Owns all compile-time guardrails** inline, right next to each respective define.
-- Owns shared buffer sizing macros under `/* Maximum lengths of character buffers */`, including `MQTT_URL_SIZE` for
-  stream/artwork URL buffers used by `player`, `audiohandlers`, and MQTT status payload sizing, plus
-  `MQTT_STATUS_SETTLE_MS` (how long an MQTT status change must remain unchanged before it is published).
+- Holds only genuine user tweaks: hardware defaults, feature gates, and the one connection-attempt count worth
+  changing per site (`WIFI_ATTEMPTS`). Stable values that nobody tunes live with the code that reads them instead -
+  network timings in `network.cpp`, buffer sizes in `netserver.cpp` / `mqtt.cpp` / `config.h`, task delays in
+  `display.cpp` / `player.cpp`, and the two cross-cutting sizes (`STATION_FIELD_LENGTH` in `config.h`,
+  `MQTT_URL_SIZE` in `mqtt.h`).
 - Defines:
   - hardware defaults (pins, feature gates)
   - updater URLs (`FILESURL`, `UPDATEURL`, `CHECKUPDATEURL`) unless disabled
@@ -227,7 +259,7 @@ Grouped (not one-by-one deep explained) areas:
     SPIA_MISO, SPIA_MOSI)` in `Config::init()` when `SPIA_SCK` is defined; otherwise `SPI.begin()` uses hardware
     defaults.
   - **Bus B** = `SPIB` (`SPIClass SPIB(SPI_BUS_SECONDARY)` declared and initialized in `config.cpp`). Only exists when
-    `SPIB_SCK` is defined. `SPI_BUS_SECONDARY` uses symbolic constants: `VSPI` (ESP32) / `FSPI` (ESP32-S3/C3) for the
+    `SPIB_SCK` is defined. `SPI_BUS_SECONDARY` uses symbolic constants: `VSPI` (ESP32) / `FSPI` (ESP32-S3) for the
     primary bus, `HSPI` for the secondary bus on all targets.
   - **Bus pin defines** (set in `myoptions.h`): `SPIA_SCK/MISO/MOSI` manually, or use shorthands: `SPIA_DEFAULT` (chip
     default pins), `SPIA_DEFAULT_XMISO` (chip default SCK/MOSI, MISO=255 — for display-only Bus A). `SPIB_SCK/MISO/MOSI`
@@ -261,7 +293,7 @@ Grouped (not one-by-one deep explained) areas:
   mount frequency. The header comment records that SD modules carrying a 74LVC125A/level-shifter cannot work, because
   CMD must be bidirectional.
 - **I2S internal DAC**:
-  - `USE_AUDIO_ESP32_DAC` — defined directly in `myoptions.h` to use the ESP32 internal DAC (ESP32 only, not S3/C3).
+  - `USE_AUDIO_ESP32_DAC` — defined directly in `myoptions.h` to use the ESP32 internal DAC (ESP32 only, not S3).
     `I2S_INTERNAL` boolean is removed.
 - **Guardrail conventions** (maintain these when adding new options):
   - `#error` for hard-invalid values: wrong board type, mutually exclusive decoders, enum/constant out of range (e.g.
@@ -271,13 +303,15 @@ Grouped (not one-by-one deep explained) areas:
     `SCREEN_BRIGHTNESS`): reverts silently to default but now emits a visible warning in the build log.
   - `static_assert` with `__builtin_strcmp` for enumerated string options (e.g. `WEATHER_API`,
     `WEATHER_WIND_SPEED_UNITS`). **Update the `static_assert` whenever a new provider/value is added.**
-  - `/* PREVENT BOARD-DEFINED PIN RE-USE */` section lives after the `/* ESP DEVBOARD */` LED block (requires `LED_PIN`
-    and `ESP_S3C3` to be defined first). Covers LED vs RST pin conflicts only — keep it narrowly scoped.
 - **What is intentionally NOT guarded**: booleans (compiler error is obvious), pin numbers (board-dependent range),
   free-form strings (`AP_SSID`, `MQTT_*`, URLs), color macros (R,G,B triplets), `AUTOBACKLIGHT(x)` (C macro function),
   `BATTERY_CURVE_MV/PCT` (already has `static_assert` in `battery.cpp`).
-- **PSRAM buffer sizing** — `PSRAM_BUFSIZE` controls the audio input buffer and FLAC reserved buffer sizes; the default
-  differs by board.
+- **PSRAM is mandatory** — `options.h` refuses any build without `BOARD_HAS_PSRAM` and accepts only `ARDUINO_ESP32_DEV`
+  / `ARDUINO_ESP32S3_DEV` (ESP32-C3 is rejected by name). Add `-DBOARD_HAS_PSRAM` to `build_flags` in `platformio.ini`.
+  The libraries keep their SRAM fallbacks as last-resort degradation, but a PSRAM-less build is no longer supported.
+- **PSRAM budget** — the per-consumer sizes and the per-build totals are tabulated at the top of `options.h`, right
+  after the board/PSRAM guards. The display framebuffer and VU canvas lines are TFT-only (an OLED build has neither);
+  the WebUI cache is opportunistic and falls back to LittleFS, so it is headroom rather than a hard requirement.
 - Buffer bar visual mapping:
   - `BUFFERBAR_VISUAL_FULL_PERCENT` controls where input-buffer fill is rendered as visually full.
   - default `82` means 82% raw fill maps to 100% bar width; set `100` to keep direct 1:1 mapping.
@@ -294,18 +328,27 @@ Grouped (not one-by-one deep explained) areas:
   library must agree with us about. `es3c28p` compiles the framework's `esp32-hal-*.c` files through it, which proves it
   stays C-safe.
 - **Contents**: the `myoptions.h` include (first, so user values beat every default here), the `VS1053_CS 255` default
-  (the core rule needs it; `myoptions.h` defines it only for VS1053 builds), the `NETWORK_CORE` tree, and the three
-  `CONFIG_ASYNC_TCP_*` overrides.
-- **The `NETWORK_CORE` tree is written to be evaluated twice**, with no marker macro: this header is compiled first, so
-  `options.h` then meets the same lines with `NETWORK_CORE` already set. The dual-core branch is guarded by its own
-  `#ifndef`; the unicore branch's `#error` tests the value (`#if NETWORK_CORE!=0`, which is 0 at that point, made by
-  this header not the user) - a plain `#ifdef`/`#error` would fire on our own definition on any single-core build. Keep
-  the two trees identical.
+  (the core rule needs it; `myoptions.h` defines it only for VS1053 builds), the `NETWORK_CORE` derivation, and four
+  `CONFIG_ASYNC_TCP_*` overrides (queue size, running core, WDT, priority) **plus `CONFIG_ASYNC_TCP_STACK_SIZE 8192`**.
+- **`CONFIG_ASYNC_TCP_STACK_SIZE` is in WORDS, not bytes** - `AsyncTCP.cpp` passes it straight to `xTaskCreate`, so
+  the library default `8192 * 2` is 16 384 words = **64 KB**, of which a `[Core.HWM]` reading showed ~15 KB in use.
+  8192 words (32 KB) keeps more than twice that peak and hands 32 KB of internal heap back to the WebUI, which is the
+  resource its first page load runs out of. Going lower (4096 = 16 KB) needs an SD-upload HWM reading first, because
+  the file manager's upload and OTA handlers also run on that task. The same words/bytes confusion runs through our
+  own stack macros (`NETWORK_TASK_STACK_WORDS`, `WEB_BRINGUP_STACK_WORDS`): a `_BYTES` name here is wrong and has
+  already misled one reader.
+- **⚠ Editing this header does not rebuild the libraries.** A plain `pio run` after a change here reuses a stale
+  `AsyncTCP.cpp.o`, so the new value silently does not take effect (observed: only the project's own TUs recompiled).
+  After any change here, `pio run -e <env> -t clean` first, and confirm the log shows
+  `Compiling .pio/build/<env>/libXXX/AsyncTCP/AsyncTCP.cpp.o`.
+- **The `NETWORK_CORE` derivation is written to be evaluated twice**, with no marker macro: this header is compiled
+  first, so `options.h` then meets the same lines with `NETWORK_CORE` already set. The `#ifndef NETWORK_CORE` guard is
+  what makes the second evaluation a no-op. Keep the two copies identical.
 - **`myoptions.h` is the user channel**: values set there (e.g. `CONFIG_ASYNC_TCP_USE_WDT 0`) reach the libraries because
   it is read here before any default - only in builds carrying the force-include (root `platformio.ini` and
   `builds/trip5/platformio.ini`; the other `builds/*` templates do not, and there the classic `options.h` copy is live).
-- sdkconfig macros (`CONFIG_FREERTOS_UNICORE`, `CONFIG_IDF_TARGET_ESP32S3`) are defined at force-include time (a clean
-  S3 build proved the unicore branch live; no board-macro proxy is needed).
+- sdkconfig macros (`CONFIG_IDF_TARGET_ESP32S3`) are defined at force-include time, so a target check works here without
+  a board-macro proxy.
 - **The AsyncTCP core is pinned, not locked**: `CONFIG_ASYNC_TCP_RUNNING_CORE` defaults to `NETWORK_CORE` but both may be
   overridden. Its task runs at priority 10, above every task we create, so which core it sits on decides what it can
   preempt - on a VS1053 build it shares core 0 with the audio decode.
@@ -374,12 +417,14 @@ depending on the selected PlatformIO environment and macro definitions.
   1. serial + LED + RGB + battery init
   2. `config.init()`
   3. `backlightControls.init()`
-  4. `display.init()`
-  5. `player.init()`
-  6. `battery.bootStatus()`
-  7. `network.begin()`
-  8. if no connectivity: start minimal server + controls + display start and return
-  9. if connectivity:
+  4. `display.init()` — the boot page comes up with its message line deliberately EMPTY
+  5. `player.init()` — a VS1053 build raises the `VS1053` cue from inside it, before the chip is touched
+  6. `display.putRequest(BOOTVERSION)` — the version string goes up only now, once, once the audio is up
+  7. `startup.checkLittleFSandVer()` — mount, health check, version marker, theme/layout id re-resolve
+  8. `battery.bootStatus()`
+  9. `network.begin()`
+  10. if no connectivity: start minimal server + controls + display start and return
+  11. if connectivity:
      - `config.initPlaylistMode()`
      - `telnet.begin()` — early on purpose: a listening socket with no task of ours, so it costs nothing
      - controls init
@@ -390,11 +435,17 @@ depending on the selected PlatformIO environment and macro definitions.
      - `netserver.setBootReady(true)` only after setup work is actually complete
      - **`netserver.begin()` deliberately does NOT happen here.** The WebUI is held back until the startup
        services are out of the way, because `begin()` is where the request queue, the listener, mDNS *and* the
-       PSRAM WebUI file cache (up to ~300 KB) are allocated, and a WebUI connection landing while a service makes
-       its own TLS connection is what overwhelms the network stack. `Startup::loop()` starts it (see that
-       section); the footer IP is the indicator, because `Display::_footerIp()` draws nothing until
-       `netserver.isListening()`. The AP and SDOFFLINE paths still start it here — the captive portal is the only
-       way in on a first boot, and offline mode runs no services at all.
+       PSRAM WebUI file cache (~120 KB with .gz files; up to ~400 KB if only plain files) are allocated.
+       `Startup::loop()` starts it (see that section); the footer IP is the indicator, because
+       `Display::_footerIp()` draws nothing until `netserver.isListening()`. The AP and SDOFFLINE paths still start
+       it here — the captive portal is the only way in on a first boot, and offline mode runs no services at all.
+     - **The start runs on its own task, not on the loop** (`Startup::bringUpWebServer()`, spawned as
+       `webBringUpTask` at `WEB_BRINGUP_TASK_STACK_SIZE` on `NETWORK_CORE`): `begin()` reads every www file into the
+       PSRAM cache and measured **1763 ms** of main-loop stall (`Main loop stalled 1805ms, worst stage
+       startup 1763ms`), long enough to starve the audio refill and cost the stream. A failed create falls back to
+       running it inline (reported, never silent), and the file-local `webBringUpActive` stops `loop()` starting a
+       second one. `begin()` still sets `listening` before it returns, so `isListening()` remains the single
+       source of truth for the footer, the ehDP gate and every other reader.
 - `loop()`:
   - AP mode: Improv + captive DNS
   - normal: telnet loop
@@ -449,7 +500,10 @@ All modules in `src/core/` follow the **class + global instance** pattern:
 - Defines key constants for LittleFS paths and data file locations.
 - `theme_t` now includes screensaver-specific clock palette fields (`clockss`, `clockbgss`, `secondsss`, `dowss`,
   `datess`) so screensaver clock/date elements can use colors independent from normal PLAYER-mode clock colors.
-- `station_t` fields (`name`, `url`, `title`) are sized by `STATION_FIELD_LENGTH` (default 170, defined in `options.h`).
+- `theme_t` carries a glow backdrop per widget: `clockbg` behind the clock and `digitbg` behind the big number
+  (`NumWidget`), so the two can glow in different colours. Both are `uint16_t` directly after their own ink
+  (`clock`, `digit`) in the same order in `ThemeData`, which is what keeps the `memcpy` sound.
+- `station_t` fields (`name`, `url`, `title`) are sized by `STATION_FIELD_LENGTH` (170, defined in `config.h`).
   These are RAM-only fields — not NVS-stored. `BUFLEN` has been retired; use `STATION_FIELD_LENGTH` for station metadata
   buffers across the codebase.
 - `SD_PATH_LENGTH` (256, defined in `sdmanager.h`) is used for SD filesystem path buffers where paths may exceed 170
@@ -459,6 +513,12 @@ All modules in `src/core/` follow the **class + global instance** pattern:
   `mute`, `up`, `down`, `prev`, `next`, `play`, `mode`, `hash`, `n0`…`n9`). It is persisted in its own NVS namespace
   (`ehradioir`) through a dedicated key map in `config.cpp`; buttons are addressed by name, never by array position. The
   old positional `ircodes_t` blob was removed.
+- Compile-time default IR codes come from the `IR_BUTTON_*` macros (0 fallbacks in `options.h`, values in
+  `myoptions.h`), carried in the `def` column of `irKeyMap[]`. A struct initialiser on `irstore_t` cannot supply them,
+  because `loadIR()` memsets the store before reading it: the defaults are seeded into slot 0 by `loadIR()` and
+  persisted in the same session, and only in the magic-mismatch branch. A store that already carries `IR_MAGIC` is the
+  user's own set and is never overwritten, so defaults exist only on an uninitialised store (fresh board, full NVS
+  erase, `setDefaults()`). `0` means no default, matching the empty-slot sentinel of `clearIR()`/`clearDuplicateIR()`.
 - `Config::saveValue(...)` API now has two simple overloads only:
   - typed: `saveValue(T* field, const T& value)`
   - string: `saveValue(char* field, const char* value)`
@@ -469,6 +529,11 @@ All modules in `src/core/` follow the **class + global instance** pattern:
   must always be on after power-on, so a standby/blank `false` must never be restored from NVS; persisting it would
   present as a "bricked" (blank) device to a normal user. It is still reported to the WebUI through `GETSCREEN` and
   drives the MQTT off-state token, but those read the live runtime value only.
+- `Config::vuSourceWanted()` is the one gate the audio libraries use to decide whether to compute VU/sample data:
+  `(store.vumeter && !isScreensaver) || (isScreensaver && store.screensaverVU)`. While awake the player page's
+  setting decides; while asleep only the screensaver meter's own option does. The split exists because the
+  screensaver meter is independent of the player page's, and gating the source on `store.vumeter` alone made the
+  screensaver meter read zero. `isScreensaver` is volatile, so the helper reads it once.
 - Legacy compatibility parameters (`commit`, `force`, and string `size_t N`) were removed.
 - String saves now normalize into a zero-filled fixed-size buffer before compare/write to avoid reading beyond short
   source strings.
@@ -484,8 +549,9 @@ All modules in `src/core/` follow the **class + global instance** pattern:
   `verifyLittleFS()` requires *in full* — it is an exact set match, so a file added here must reach every
   device or the check reports the filesystem incomplete and the repair path runs. `Config::dataFiles[]`
   holds the optional `/data` files and only feeds `pruneLittleFS()`, so it may name a file that does not
-  exist; `THEME_SLOT_FILES` adds the ten `xtheme1..10.json` custom theme slots there purely so the next
-  cleanup does not delete them. Both lists are compared against a basename, never a path.
+  exist; `THEME_SLOT_FILES` and `LAYOUT_SLOT_FILES` add the ten `xtheme1..10.json` and the ten
+  `layout1..10.json` user slots there purely so the next cleanup does not delete them. Both lists are
+  compared against a basename, never a path.
 - `Config::loadTheme()` resolves through the theme registry, not the compiled table, and deliberately
   tolerates an unresolved id: it runs from `_initHW()` before LittleFS is mounted, so a custom id cannot be
   judged yet — see `src/displays/themeregistry.*`. `Startup::checkLittleFSandVer()` calls it again once the
@@ -508,6 +574,9 @@ All modules in `src/core/` follow the **class + global instance** pattern:
   - named IR code storage in the dedicated `ehradioir` NVS namespace (`IR_MAGIC` 1812 stored under key `irset`, one key
     per button via `irKeyMap[]`); helpers `loadIR()`, `saveIR()` / `saveIR(button)`, `irCodes()`, `clearIR()`,
     `clearDuplicateIR()`, `irButtonByName()`, `irButtonCount()`, `irButtonKey()`, `irAction()`
+  - compile-time default IR codes: `IR_BUTTON_*` (0 fallbacks in `options.h`, values in `myoptions.h`) held in the `def`
+    column of `irKeyMap[]`, seeded into slot 0 of a reset store and persisted by `loadIR()`; a store that already
+    carries `IR_MAGIC` is never touched
   - `deleteOldKeys()` also drops the legacy `ircodes` key and the former persisted `dspon` key from the `ehradio`
     namespace (`dspon` is now runtime-only state and must not be restored on boot)
 - SPI bus initialization: `Config::init()` calls `SPI.begin(SPIA_SCK, SPIA_MISO, SPIA_MOSI)` only when `SPIA_SCK` is
@@ -518,7 +587,7 @@ All modules in `src/core/` follow the **class + global instance** pattern:
 - **A safe-mode boot pays a deliberate 1 s before anything else.** `setup()` holds `if (!config.store.bootStableMarker)
   delay(1000)` and then dumps the config (`bootInfo`, ~196 ms at 115200), so the early stage measures ~1586 ms in safe
   mode against ~590 ms settled - the NVS path itself costs ~412 ms and needs no optimisation. `bootStableMarker` is only
-  set ~10 s after the startup services finish, so rebooting the device within ~20 s of a boot puts the next one into
+  set `BOOT_STABLE_TIME` after the WebUI comes up, so rebooting the device before that puts the next one into
   safe mode with that delay (worth knowing when timing boots).
 - SD-specific behavior:
   - `_initHW()` configures `SD_CARD_DETECT_PIN` as `INPUT_PULLUP` when available
@@ -535,45 +604,59 @@ All modules in `src/core/` follow the **class + global instance** pattern:
 ## `src/core/startup.h` / `startup.cpp`
 - Boot-only orchestration module following the standard core `class + global instance` pattern (`Startup startup;`).
 - **`loop()` is also where the WebUI starts, and the three service states are what decides it.** The condition is
-  `!netserver.isListening() && network.status == CONNECTED && (_services != SVC_WILL_RUN || cardInUse())`, at the
-  very top of `loop()` — above its `_bootStablePending` early return, which is why it cannot live at the end of
-  `setup()`. All three parts are load-bearing. Waiting only for `SVC_DONE` would leave **SD mode with no WebUI**:
-  `SVC_WILL_RUN` means the task was *created*, and it parks in `while (cardInUse())`, which is exactly when the
-  WebUI is needed to switch back to web radio. `SVC_NONE` is the opposite trap — no WiFi, no `UPDATEURL` or the
-  web files missing means no services are coming, so nothing else would ever start the server. `begin()` creates a
-  fresh queue on every call, so `isListening()` is what keeps the trigger idempotent, and the trigger sends `NEWIP`
-  so the footer IP appears with the server rather than at boot.
-- **Boot stability is a state, not a timer.** `Startup::_services` is `SVC_NONE` / `SVC_WILL_RUN` / `SVC_DONE`, and
-  `setup()` has already settled which one applies by the time `loop()` can run, because `startupServices()` has exactly
-  one call site — [`main.cpp:142`](src/main.cpp:142), inside `setup()`. `loop()` then has three exits: `SVC_NONE` proves
-  the boot over `BOOT_STABLE_TIME` from power-on (nothing risky will run, but an early crash must still trip Safe Mode
-  on the next boot); `SVC_WILL_RUN` **while the card is still in use** proves it after `STARTUP_ASYNC_SERVICES_DELAY +
-  BOOT_STABLE_TIME`, with the reason `startup services were suspended`; and `SVC_DONE` marks it stable
-  `BOOT_STABLE_TIME` after the downloads finish. Two of those count from power-on, each safe for its own reason:
-  `SVC_NONE` because no risky work is scheduled at all, and the parked case because the services delay is waited out
-  first, so a task that was only slow to start has started by then.
-- **The three boot outcomes, and why the state can always be settled before `loop()`:** *SD offline*
-  (`network.offlineMode || config.store.SDoffline`) never calls `checkSafeMode()`, so `_bootStablePending` stays false
-  and the marker is not touched at all — that is the long-standing workaround and it is deliberate. *No WiFi / soft AP*
-  returns early from `setup()` before the services call, leaving `SVC_NONE`, and the boot then proves itself over
-  `BOOT_STABLE_TIME` from power-on. *Connected* records `SVC_WILL_RUN` before the task is created, and the task sets
-  `SVC_DONE`, so a download that finishes quickly cannot be missed.
-- **SD playback suspends the services, and the boot is still proven.** The task parks in `while (cardInUse())` until the
-  card is free, and `loop()` marks the boot stable once `STARTUP_ASYNC_SERVICES_DELAY + BOOT_STABLE_TIME` has passed
-  with the task still parked — `Boot stable after ~20000 ms - 10 s after the startup services were suspended`. The first
-  version waited indefinitely for the park to end, and its consequence was the opposite of what it looked like: a device
-  that booted into SD playback never proved its boot, so the next boot came up in Safe Mode once, and safe mode forces
-  web mode — meaning **SD mode could not survive a restart at all**, and smartstart for SD was effectively ignored every
-  time. Nothing risky runs in a parked boot, which is what justifies the mark; the delay is waited out so that a task
-  merely slow to start is not mistaken for a parked one.
+  `!netserver.isListening() && !webBringUpActive && network.status == CONNECTED && (_services != SVC_WILL_RUN ||
+  cardInUse())`, at the very top of `loop()` — above its `_bootStablePending` early return, which is why it cannot
+  live at the end of `setup()`. All three service parts are load-bearing. Waiting only for `SVC_DONE` would leave
+  **SD mode with no WebUI**: `SVC_WILL_RUN` means the task was *created*, and it parks in `while (cardInUse())`,
+  which is exactly when the WebUI is needed to switch back to web radio. `SVC_NONE` is the opposite trap — no WiFi,
+  no `UPDATEURL` or the web files missing means no services are coming, so nothing else would ever start the server.
+  `begin()` creates a fresh queue on every call, so `isListening()` is what keeps the trigger idempotent, and the
+  trigger sends `NEWIP` so the footer IP appears with the server rather than at boot.
+- **The trigger only spawns the task; `bringUpWebServer()` does the work.** `begin()` + `startLoopTask()` + the
+  `NEWIP` request run on `webBringUpTask` (one-shot, `WEB_BRINGUP_TASK_STACK_SIZE`, `NETWORK_CORE`), because on the
+  loop they cost 1763 ms of stall and the audio refill goes with them. `webBringUpActive` covers the gap between
+  spawning and `listening` becoming true, and is cleared by the task; if the create fails the work runs inline and
+  says so, because a WebUI that starts late beats one that never starts.
+- **`SVC_DONE` is set the moment the last download returns**, clearing `_servicesBusy` with it. There is no settle
+  delay any more (`STARTUP_ASYNC_SERVICES_DELAY` is gone): it only postponed the WebUI behind the downloads, and the
+  window it was protecting is covered by the boot-stable proof below. `_servicesBusy` still brackets exactly the
+  downloads, which is what keeps the MQTT apply and the VU startup throttle held off for that window.
+- **Boot stability is proved by the WebUI coming up, not by the services finishing (2026-10-20).** The marker is set
+  `BOOT_STABLE_TIME` after `netserver.isListening()` is first seen true — one stamp (`_webUpMs`) plus one comparison,
+  and the reason reads `10 s after the WebUI came up`. This replaced three exits keyed on `_services`
+  (`SVC_NONE` from power-on, `SVC_WILL_RUN` while parked, `SVC_DONE` after the settle) for a reason the logs made
+  plain: the marker could be set *before* `netserver.begin()` had even finished, so it proved a boot whose riskiest
+  step — the bring-up and the first page load, which is the largest allocation burst in the session — had not run.
+  The services are no longer consulted at all, which is also what makes **SD mode survive a restart**: in SD mode they
+  stay parked for the whole session, and the WebUI comes up immediately, so the boot proves itself the same way.
+- **What still holds `_services`:** the enum stays because `servicesPending()` gates the radio-browser click (the
+  services hold) and `servicesBusy()` throttles the VU and the MQTT apply. Only the boot-stable decision stopped
+  reading it.
+- **The stamp covers every path with one line**: the deferred bring-up sets `listening` inside `begin()`, while the
+  AP/soft-AP and SD-offline paths call `netserver.begin()` from `setup()`; `loop()` stamps `_webUpMs` the first time
+  it sees the server listening, so all three converge without a per-path branch. `deferBootStable()` (called by
+  `network.cpp` on a stream loss, a Wi-Fi loss or a reconnect inside the boot window) restarts the countdown from now
+  if the server is up, and clears the stamp if it is not, so the proof restarts when the WebUI does.
+- **SD offline still never calls `checkSafeMode()`** (`network.offlineMode || config.store.SDoffline`), so
+  `_bootStablePending` stays false and the marker is not touched — the long-standing workaround, still deliberate.
+- **The earlier design history is worth keeping:** the first version waited indefinitely for the SD park to end, so a
+  device that booted into SD playback never proved its boot and the next boot came up in Safe Mode once — and safe
+  mode forces web mode, meaning **SD mode could not survive a restart at all**. Keying the proof on the WebUI removes
+  that whole class of problem, because the WebUI comes up in SD mode too.
 - **Two earlier designs were replaced:** one fell back to the power-on count when `_servicesDoneMs == 0`, marking the
   boot stable exactly as the services started; another kept a `BOOT_STABLE_BACKSTOP_MULT` timer that could call a boot
   stable while the risky window was still open. Both are gone.
-- The startup services are a known high-risk path: three concurrent TLS sessions against ~75 KB of internal heap, which
-  has been observed to exhaust it and crash the boot. See `.github/code-issues.md` section 7.
+- **The startup services were the suspected risk; a core-monitor log says otherwise.** The three downloads are
+  sequential, and each handshake costs ~21 KB transiently and hands it back: 143520 free before them, 122544 during
+  the first handshake, 131712 after it, 140844 after the settle. What collapses the stack is the WebUI's first page
+  load, which took that same boot from 140844 free to **9 KB free with a 2 KB largest block** — the state in which no
+  handshake, no 8 KB task stack and no response String can be allocated, and the stream cannot be re-read. That is
+  why the bring-up now runs off the main loop and the radio-browser click yields to it.
+  (This note used to cite `.github/code-issues.md` section 7; that section does not exist - the issue file stops at 4.)
 - Two accessors publish that state: `servicesBusy()` is true only inside the task body (the VU limiter and `mqtt.cpp`
   want exactly that), while `servicesPending()` is `SVC_WILL_RUN` and so also covers the park and the countdown. The
-  wider one is what to hold another job back with - `netserver.cpp` holds its radio-browser click on it.
+  wider one is what to hold another job back with - `netserver.cpp` holds its radio-browser click on it, then holds
+  it again for the WebUI's quiet window and drops it outright when `heapCanAffordTls()` finds no contiguous block.
 - Owns startup-time helpers that were previously mixed into `config.cpp`:
   - boot-time version marker and required LittleFS/WebUI file verification (`checkLittleFSandVer()`) — the verification
     itself lives in `Utility::verifyLittleFS()`, see the LittleFS notes below
@@ -684,12 +767,14 @@ All modules in `src/core/` follow the **class + global instance** pattern:
   - version-file parsing for online-update detection
   - startup background update scheduling (`startupServicesAsync`) — spawned as a FreeRTOS task on `NETWORK_CORE` at low
     priority:
-    - waits `STARTUP_SERVICES_DELAY` seconds before any work, letting audio buffer fill first
+    - starts immediately once the card is free (there is no pre-delay any more - see `BOOT_STABLE_TIME`'s note in `options.h`)
     - verifies WebUI locale JSON file; downloads if missing
     - checks for new firmware version via `new_ver.txt`; triggers OTA if `autoupdate` is enabled
     - downloads default `playlist.csv` from `PLAYLIST_DEFAULT_URL` if file is missing
     - updates `timezones.json.gz` and `rb_srvrs.json` from online sources
     - cleans stale search results older than 24 hours
+    - sets `SVC_DONE` and clears `servicesBusy()` as soon as the last download returns; `SVC_DONE` is what releases
+      the WebUI, and the boot-stable countdown no longer depends on any of it
     - deletes the `ESPFileUpdater` param and self-terminates via `vTaskDelete(NULL)`
   - `deassertCsPins()` — called from `main.cpp` `setup()` before any device init. Sets all known SPI CS pins
     (`VS1053_CS`, `SD_CS`, `TFT_CS`, `TS_CS`) to `OUTPUT` + `HIGH` to prevent floating CS from causing bus contention
@@ -723,6 +808,10 @@ All modules in `src/core/` follow the **class + global instance** pattern:
   - AP fallback with DNS captive portal
   - Improv provisioning flow
   - WiFi reconnect/disconnect handlers
+  - ehDP discovery responder (`ehdp.loop()` from the 1 s tick), gated on `netserver.isListening()`: the reply
+    advertises UI port 80, so it must not answer while the WebUI is held back or not yet up. Keying on the server
+    rather than on the services state is also what keeps discovery working in the SD-parked boot, where the task
+    stays in `SVC_WILL_RUN` for the session but the WebUI is started immediately
   - periodic ticker logic for:
     - time sync interval
     - weather sync interval
@@ -787,7 +876,7 @@ All modules in `src/core/` follow the **class + global instance** pattern:
     cover association *and* the lease, because `WL_CONNECTED` is GOT_IP and the late-GOT_IP mode measures 4.8 s on its
     own — that mode is one lost DISCOVER, as lwIP retransmits at about +0, +4 and +12 s, so a window can be spent on
     nothing but lost DISCOVERs and still be called a failure. Each candidate therefore gets exactly two windows: 8 s as
-    before, then a retry of `WIFI_ATTEMPTS * 500 * WIFI_RETRY_SCALE` (options.h, default **WIFI_RETRY_SCALE 2** = 16 s).
+    before, then a retry of `WIFI_ATTEMPTS * 500 * WIFI_RETRY_SCALE` (`network.cpp`, **WIFI_RETRY_SCALE 2** = 16 s).
     Only after the second failure is the next candidate tried, and only after that the SoftAP — worst case ~25 s per
     candidate against ~17 s before. The retry is a **real restart, not a re-association**: the shared helper
     `wifiRestartForRetry()` does `WiFi.disconnect(true, false)` (radio off, stored credentials kept), waits for the
@@ -838,8 +927,9 @@ nothing is playing, so an assignment wrote `false` and the Wi-Fi returned to a s
 
 **The ladder has a floor and a ceiling, and the reset is reached from two places** through one helper,
 `forceLinkReset()`. The floor is a ladder that cannot be created at all: the create needs
-`NETWORK_TASK_STACK_BYTES` (8 KB on the S3 - `NETWORK_TASK_STACK_SIZE` 4 KB × `STACK_MULTIPLIER` 2) of
-contiguous heap, and the heap is lowest exactly when the stack is wedged, so the one rung that matters was
+`NETWORK_TASK_STACK_WORDS` (32 KB - see the stack section: the old "8 KB" was 4x smaller than the real
+allocation, because 8192 was passed to `xTaskCreate` as words) of contiguous heap, and the heap is lowest exactly
+when the stack is wedged, so the one rung that matters was
 unavailable when it was needed. A failed create used to be logged once (with the message swallowed, see the
 note in the guide) and forgotten, every 5 s forever, which is the incident that prompted this: the log showed
 `stream retry task is gone with a resume still owed` alternating with a bare `[ERROR] Network` for minutes
@@ -863,8 +953,18 @@ stack with an exhausted socket pool also fails fast, so the first two attempts o
 "the host refused". The probe costs a gateway connect (~30 ms) or a bare-IP connect (≤700 ms), nothing beside
 an attempt, and only WEDGED is acted on: a station that is merely offline still gets the patient 15 s then 60 s
 tail forever, unchanged, because a reset would fix nothing there and costs a scan, a reassociation and DHCP.
+
+**A silent timeout and an exhausted pool are different wedges, and the durations tell them apart.** The boot log of
+the collapsed case reads `gateway FAIL 1607ms` (4 ports x 400 ms) and `internet TCP FAIL 702ms` (the full bound) -
+silent timeouts, i.e. a stack that cannot allocate or transmit, not one out of connection slots (which fails
+instantly and would have needed a bigger `CONFIG_LWIP_MAX_ACTIVE_TCP`, impossible without a pioarduino
+`custom_sdkconfig`). The heap was the answer there: `heapCanAffordTls(bytes)` (`network.cpp`) is the test that can
+see it - one **contiguous** block, the figure a handshake actually needs, which `ESP.getFreeHeap()` and the
+`MIN_MALLOC` threshold cannot express.
 With the probe always asked, a stack that never answers is identified on the **first** attempt, so the reset
-lands about 8 s after the stream is lost instead of about 18 s.
+lands about 8 s after the stream is lost instead of about 18 s. The gateway leg tries a fixed port list
+(`kGatewayProbePorts`, `network.cpp`: 80, 53, 443, 8080) and stops at the first that answers, because a router's
+UI or DNS is frequently not on 80 and a wrong guess reads as "gateway silent" - a false WEDGED.
 
 **One spawner, and a ladder that cannot lose its task.** Everything that starts `retryStreamConnection` - the
 arm gate in `player.loop()`, `WiFiReconnected`, and now the self-heal - goes through **`spawnStreamRetry()`**
@@ -874,9 +974,20 @@ is checked, because `player.loop()` sets `network.lostPlaying = true` **before**
 else clears that flag except a fresh Wi-Fi reconnect event - so a silent failure closed the arm gate until a
 reboot. `ticks()` (the 1 s `Ticker` heartbeat, `ctimer.attach(1, ticks)`) self-heals the same way: if
 `lostPlaying` is set, no task is servicing it, `!beginReconnect` and the link is up, it re-spawns, rate limited
-by `STREAM_RETRY_RESPAWN_MS` (options.h), and escalates to a link reset once the re-spawns themselves keep
-failing. The `wifiReconnectionTask` spawn is checked and logged too, but has no equivalent fallback: the AP is
-otherwise only re-found on the next disconnect event.
+by `STREAM_RETRY_RESPAWN_MS` (`network.cpp`), and escalates to a link reset once the re-spawns themselves keep
+failing. The `wifiReconnectionTask` spawn has the same shape: `WiFiLostConnection` and the self-heal in `ticks()`
+both go through `spawnWifiReconnect()`, a failed create is visible in the log, and the self-heal retries it every
+`WIFI_RECONN_RESPAWN_MS` (5 s) and escalates to `recoveryReboot()` after `WIFI_RECONN_SPAWN_FAIL_MAX` (2)
+failures. That matters because `forceLinkReset()` drops the link while the old stream task's 8 KB stack is still
+held, so the first create can fail on a fragmented heap with `beginReconnect` already true - and that path had no
+other way back, since the AP is only re-found on the next disconnect event.
+
+**A failed user play enters the same ladder.** `Player::_play()` and `playUrl()` call
+`MyNetwork::noteConnectFailure()` when `connecttohost()` fails; it probes first and, only on WEDGED, sets
+`lostPlaying` and takes rung 1 with `forceLinkReset()` - `GOT_IP` then restarts the ladder, which spends 2/3 and
+3/3 before `recoveryReboot()`. The station that failed is saved as the resume target first, so recovery plays the
+station the user chose rather than the previous one. A played-stream ladder probes once per attempt; this entry
+does the same, one probe per failed press.
 
 **Why the VS1053 build depended on this ladder more than the I2S build.** Both libraries retry a dead stream
 themselves every 5 s (`streamDetection()` -> `connecttohost(m_lastHost)`), but only the VS1053 failure branch
@@ -901,7 +1012,14 @@ does not. `WIFI_SETTLE_MS` applies only when `WiFi.mode()` reports a change, and
 **Instruments, all unconditional.** `MAIN_LOOP_STALL_MS` names the worst stage of a slow `loop()` (this is what
 identified `player+saves`), `NVS_SLOW_WRITE_MS` logs a slow NVS commit, `[Heap]` gives internal free **and the
 largest contiguous block** (what a TLS handshake needs), recovery logs under `Network`, and `Telnet::loop()`
-must never block. Every cadence and threshold above is a macro in `options.h`, **except the connect bound**:
+must never block. Three diagnostics exist for the WebUI's own cost, all under `CORE_MONITOR`:
+`netserver.begin N ms` (one line, the deferred start's total) with `Netserver |   begin phase: X at N ms` marks
+inside it (queue / routes / psram cache / webserver.begin / mdns / ota) for finding which phase owns the time;
+`[Core.HWM] [async_tcp] stack HWM: N bytes` on every websocket connect, plus one on the final chunk of both upload
+paths (`handleUpload()`, and `filemanager.cpp`'s `onUploadChunk()`), which is the reading
+`CONFIG_ASYNC_TCP_STACK_SIZE` is set against. **That macro is in words, not bytes** - `8192 * 2` is a 64 KB stack,
+of which the log shows ~14 KB used. Every cadence and threshold above is a macro in `options.h`, **except the
+connect bound**:
 `m_connectTimeout_ms` / `_ssl` in `src/libraries/I2S_Audio/Audio.h` (1200 ms), separate from
 `CONNECT_HTTP_HTTPS_TIMEOUT`, which doubles as the socket READ timeouts and must stay patient for slow streams.
 
@@ -931,6 +1049,18 @@ thinks the radio forgot everything. The loader-side wait (`plans/network-recover
     `mute` command, and the IR mute button — the `DSP_DUMMY` suppression lives only at the physical-button call site.
   - `prev()` / `next()` / `toggle()` delegate retry cancellation to `network.cancelStreamRetry()` (previously duplicated
     inline).
+  - **Shuffle used to be a uniform draw *with replacement*, and three defects followed from that shape.** `next()` called
+    `random(1, utility.playlistLength())` - Arduino's `random(min, max)` excludes `max`, so **the last track could never
+    be chosen** (and a one-track playlist drew station 0); consecutive draws shared no memory, so repeats were expected
+    rather than impossible (23 draws from 159 tracks contain ~1.6 duplicate pairs); and `prev()` had no shuffle branch,
+    so it replayed the current track. **All three are fixed (2026.10.25):** `_shuffleNext()` now deals from a **keyed
+    Feistel permutation with cycle-walking** over `1..n` - no repeat until the whole playlist has played, **zero bytes
+    per track** (one `uint32_t` counter is the entire state), and because a Feistel network is invertible `_shufflePrev()`
+    steps back through the same walk, so "the track that played three tracks ago" is `counter - 3` re-derived. The domain
+    is the smallest **even-bit** power of two `>= n`, so fewer than half of all counters are skipped and a step costs two
+    checks on average. **A shuffle bag was considered and rejected** (4 bytes per track = 4 MB at a million tracks), and
+    **seeding a PRNG once cannot do this**: reducing a large output space onto `n` values repeats by the birthday bound
+    whatever the period. See `plans/shuffle-without-repeats.md`.
   - **`setReady()`: the text a mode shows before anything has started playing in it - the one place a mode entry decides
     the title lines.** Called from `Config::changeMode()` (both directions, beside the `NEWSTATION`/`NEWTITLE` requests
     it already sends), from `SDManager::trySdRemount()`, and from the SD manager's close. It clears the player error and
@@ -951,6 +1081,30 @@ thinks the radio forgot everything. The loader-side wait (`plans/network-recover
   - interacts with radio-browser click reporting (clicks are gated on `!network.lostPlaying` so automatic retry
     reconnections do not fire clicks; only explicit user-initiated plays do)
   - calls `rgbled` and `backlightControls` directly during playback start/stop
+- **A silent audio stop is now recorded, because nothing else can report one.** `Player::loop()`'s
+  `!isRunning() && _status==PLAYING` gate prints one `Player` line (pos, duration, InBuff fill, `autoAdvance`, mode,
+  and the card's `ready`/strike pair) before it stops. That gate also fires on **every normal SD track change**,
+  because a clean EOF clears `m_f_running` inside `Audio::loop()` a few statements earlier - so `advance 1` with `pos`
+  at the end of the file is a completed hand-over, `pos 0` is a dead file handle, and the line is the split between
+  them. The audio callbacks cannot supply this: `AUDIO_INFO` is only produced by code that is no longer running once
+  the library's `processLocalFile()` guard fails, and the EOF exit path's `Closing audio file` / `End of file` are
+  both gated on a valid `audiofile`, so a smeared handle prints nothing at all.
+- **The card heartbeat is `SD_PLAY_TRACE_MS`** (default 30000, `0` disables), an `#ifndef` in `player.h` like
+  `SDMAN_AUTO_EXIT_MS` rather than an `options.h` value, so a `myoptions.h` can change it: one `SD` line per interval
+  while a card file plays (`pos`, `buffer`, `card ready/strikes`), re-armed on every entry to playback. It is the only
+  record of *when* a silent stop happened, since the stop itself produces no line.
+- **`PR_CHECKSD` stops the file before it unmounts, and asks the card again before leaving the mode.** The probe
+  shares the bus with the file being read, so three misses mean "busy" as easily as "gone": the branch closes the
+  audio file first (`stopSync()`, 50 ms settle), re-probes once with nothing reading the card, and only then decides -
+  a card that answers resumes the station with `PR_PLAY, lastStation()`, a card that does not drops to `PM_WEB`
+  through `changeMode()` (which unmounts in its own order), and `SDOFFLINE` handles it locally because `changeMode()`
+  returns immediately in that mode. **Rule for new code: the audio file is closed before `sdman.stop()`, always** -
+  unmounting under an open `File` leaves the library's guard returning silently with `m_f_running` still true.
+- **`lastSdStation` is a deferred save.** Both write sites - the `lastStation()` setter in `config.h`, which
+  `next()`/`prev()` reach from inside the audio EOF callback, and `_play()`'s own save - use
+  `saveValueButWait(..., 5000)`. An immediate `saveValue` there put an NVS commit (and its page compaction) on the
+  main loop at every track change; `plans/sd-playback-silent-stop.md` has the measurements and the remaining hole
+  (NVS still runs on the main task when the deferred slot fires).
 
 ## `src/core/audiohandlers.h` / `audiohandlers.cpp`
 - Callback bridge used by the audio libraries.
@@ -1011,7 +1165,49 @@ thinks the radio forgot everything. The loader-side wait (`plans/network-recover
   up, above and below it - and that figure is the floor the walking clock is clamped to. `_sstext` is created and
   re-init'd like any other scroll line, so it carries the shared mark at its wrap, and `_screensaverLine()` joins the
   line's own parts with that same helper - the two cannot differ, and the character lives in one file (see the
-  widgets.cpp note below). See `plans/screensaver-panel-ownership.md`.
+  widgets.cpp note below). **The line runs at three quarters of the weather row's speed**:
+  `_screensaverWidgets()` scales `scrolldelta` by 3/4 where it divides exactly (a multiple of 4) and otherwise
+  stretches `scrolltime` by 4/3 - the step is preferred because it keeps the finer motion, but the OLEDs' 1 px step
+  (and the TFTs' 2 px) would truncate to 0 or to half the speed, so those take the interval path. The start delay
+  and both buffer sizes are `weatherConf`'s own, unmodified. **The line is one state or the other, never both**:
+  while `player.isRunning()` it is the station name and the two title halves and the weather is deliberately left
+  out (a single-row strip that mixes a forecast into a track name pushes the track off it), and over silence it is
+  `network.weatherBuf` alone - the same split `ssLineHasText()` refuses the strip on. Both transitions re-build it
+  through `config.setTitle()` -> `NEWTITLE` -> `_title()`, so the composition follows the transport with no extra
+  refresh path. **This is the one line that must MOVE**, so `_screensaverLine()` hands its single copy to
+  `ScrollWidget::setTextLooped()` instead of `setText()`: a still row on an otherwise idle panel reads as broken
+  furniture, and padding with blanks was tried and reads as a fault, so the widget repeats the text until it is
+  wider than its span - joined with `_sep`, its own mark, so the seam is indistinguishable from the joins inside
+  one copy and from the mark a scroll cycle prints at its wrap. The measurement is `setText()`'s own
+  (`preTextString()`, then codepoints at `_charWidth`, against `_width`, through `_widthOf()`), so the loop and
+  `_checkIsScrollNeeded()` cannot disagree; the ceiling is `_buffsize - 2`, exactly what `setText()` keeps, because
+  a truncated copy would stop the line scrolling again. Every panel is far inside that budget (the widest, 460 px
+  at text size 1, is 77 characters). The composition above it, `ssRowH()` and `_ssContentH()` are untouched - it
+  is the text's PARTS that size the strip, never their repetition - and every other row in the firmware still
+  calls plain `setText()`. **A part the line would only repeat is left out:** an untagged SD file's "station name"
+  IS its filename, and its two title halves are that filename cut at the first `" - "`, so `nameRepeatsTitle()` in
+  `display.cpp` re-joins the halves and compares them with the name extension-stripped and case-insensitively (one
+  side is a filesystem name, the other came back through the audio library's tag path) - skipping the meta only when
+  they match, so `03 - Song Title.mp3` reads `03 * Song Title`. That skip is the SCREENSAVER's alone: the player
+  page's meta line still shows it. The partial duplicate `handleId3Artist()` creates in SD mode - the name
+  overwritten by the artist tag, i.e. `The Beatles * The Beatles * Something` - is deliberately not covered; the
+  same predicate against `t1` would close it. See `plans/screensaver-panel-ownership.md`,
+  `plans/screensaver-line-scroll.md`, `plans/screensaver-line-loop.md`, `plans/screensaver-line-duplicate-name.md`
+  and `plans/screensaver-line-weather-and-clock-snap.md`.
+- **A track change blanks the info line for three seconds** (`SS_LINE_HOLD_MS`).  The trigger is `NEWSTATION`
+  handled while `config.isScreensaver`: `_play()` queues it BEFORE `connecttoFS()`, so the hold is already up when
+  `handleBeginSdRead()` clears the title - which is the moment the weather would otherwise take the strip - and a
+  manual skip is excluded because `screenSaverExit()` queues its mode change first, leaving `isScreensaver` false
+  by the time the request is handled.  Without it an SD boundary rewrites the line two or three times as the title
+  is cleared and re-filled (the visible reset) and flashes the forecast over the gap.  `Display::_ssHoldLine()` in
+  `display.cpp` blanks the widget with `setText("")` - the whole span on both draw paths, because `_windowRect()`
+  widens an empty line to the span - and sets `_ssHoldUntil`; `_screensaverLine()` refuses on that deadline, so
+  every writer is covered (`NEWTITLE`, `NEWWEATHER`, `SHOWWEATHER`, and an `SSREBUILD` re-init), and
+  `Display::loop()` is what clears it and repaints once, because the requests that would have painted the line are
+  exactly the ones being refused.  `_switchMode()` clears the deadline in both screensaver branches - a fresh entry
+  is not a track change and leaving takes the page away - while `_enterScreensaver()` deliberately does not, since
+  `SSREBUILD` re-enters through it.  The strip keeps its height while blank, so `_ssContentH()` and the clock's
+  walk floor do not move.  See `plans/screensaver-line-hold.md`.
 - **The screensaver owns the panel**: `_weatherHidden()` and `_clockHidden()` both answer for
   `config.isScreensaver` before anything else, because the WebUI is reachable while the device is asleep and
   both predicates are consulted from `_applyState()` (which runs its lock lines before its isScreensaver early
@@ -1024,10 +1220,27 @@ thinks the radio forgot everything. The loader-side wait (`plans/network-recover
   `_screensaverWidgets()` on the one path that locks the clock for the meter, so the two cannot disagree; a
   derived predicate was rejected because the canvas-allocation failure path - where the clock is what the
   screensaver shows - is precisely the case a derived answer gets wrong.
+  **The clock's POSITION is the walk's too.** `_layoutChange()` skips every `moveBack()`/`applyMove()` on the
+  clock while `config.isScreensaver` (`ssOwnsPanel`), because `PSTART`/`PSTOP` arrive during playback as well: an
+  SD EOF track change queues `PSTART` from `_play()`, which deliberately stays in the screensaver, and the old
+  unconditional `moveBack()` there dragged the wandering clock to `clockConf` and parked it until the next
+  `SCREENSAVERMOVE` (`options.h`) step - the reported snap on every track change. Placing the clock is
+  `_enterScreensaver()`'s and `_screensaverClockTarget()`'s business. `_moved` stays true, so the hand-back in
+  `_switchMode(PLAYER)` still restores the conf position; the lock and `hideWeatherIfChanged()` in that function
+  are untouched, because `_clockHidden()` already answers for `config.isScreensaver`.
+  See `plans/screensaver-line-weather-and-clock-snap.md`.
 - **A user action wakes the panel, and the wake is explicit.** The screensaver is only ever left by a
   `NEWMODE, PLAYER`, which is issued from two places: `Controls::screenSaverExit()` - which every panel handler
   (encoder, buttons, IR) runs first, clearing the display queue, restarting the countdown and queueing the mode -
-  and `_play()`'s success branch ([`player.cpp`](../src/core/player.cpp:345)). The WebUI has no handler of its own,
+  and `_play()`'s success branch ([`player.cpp`](../src/core/player.cpp:345)), **but only when `_play()` was not
+  reached from the EOF callback**. `Player::_autoAdvancePlay` is re-derived from `autoAdvance` on every `PR_PLAY` -
+  the only call site of `_play()` - and it gates three things there: `setDspOn(1)` (which calls `display.wakeup()`,
+  so it lit a **blanked** panel), `resetScreensaverTimers()` (which restarted both the screensaver and the sleep
+  countdown) and the `NEWMODE, PLAYER` above. Without that gate an SD playlist woke the panel, exited the
+  screensaver and restarted its timers **on every track boundary**, then re-entered it after the playing timeout -
+  a wake/exit/re-enter loop per track, and a sleep timer that could never expire. Every user path is unaffected
+  because they all reach `screenSaverExit()` first, and `autoAdvance` is set nowhere except
+  [`handleEofMp3()`](../src/core/audiohandlers.cpp:328). The WebUI has no handler of its own,
   so its transport commands (`toggle`, `prev`, `next`, `playstation`/`play`, `start`, `stop`, `burl`/`playurl`) now
   call `Controls::screenSaverExit()` from `CommandHandler::exec` as well. That was the pause gap: pause is
   `player.toggle()` with `_status == PLAYING` -> `PR_STOP` -> `_stop()`, which queues only `DBITRATE`/`PSTOP` and so
@@ -1055,7 +1268,8 @@ thinks the radio forgot everything. The loader-side wait (`plans/network-recover
     `metaBGConfInv` layout. On OLED: color swap only. Uses conditional rendering at widget init time — no theme
     mutation.
   - `getThemeListJson()` / `getLayoutListJson()` — serve dropdown data to WebUI from PROGMEM `_themeNames[]` /
-    `_layoutNames[]`.
+    `_layoutNames[]`. On a non-TFT build (`!DSP_TFT && !DBGWUI`) the theme list stops at `THEME_BUILTIN_COUNT`:
+    custom slots are display themes with no WebUI palette, so the "WebUI Theme" dropdown offers the built-ins only.
   - `#ifndef HIDE_*` compile guards removed from `_reinitWidgets()` and `_buildPager()` — all widget init now uses
     runtime null-checks.
   - `_buildPager()` no longer calls `_reinitWidgets()` — state application is handled by `_applyState()`.
@@ -1079,9 +1293,9 @@ thinks the radio forgot everything. The loader-side wait (`plans/network-recover
 - **The meta fill pair belongs to `LayoutData`; the boot band to `BootData`.** `metaBGConf` / `metaBGConfInv` are
   alternatives selected by *invert title* (`Display::_applyMetaInvert()`, `display.cpp`), never both, and with **no
   fallback**: an empty `metaBGConfInv` means invert mode draws no bar, which is how a layout declines one. Both are
-  plain fills drawn in `config.theme.metafill`, except that **TFT only** replaces `metafill` with `theme.div` first when
-  inverted; OLED has no such override and its drivers point `metafill` at a foreground shade (`oledcolorfix.h`,
-  `displaySSD1322.cpp`), so a band there reads as a solid block rather than a tint — hence the OLED confs carry a
+  plain fills drawn in `config.theme.metabg`, except that **when the title is inverted** the band uses
+  `config.theme.line` instead (the rule under the meta). The OLED drivers point `line` at a foreground shade
+  (`oledcolorfix.h`, `displaySSD1322.cpp`), so a band there reads as a solid block rather than a tint — hence the OLED confs carry a
   hairline or `{ }` in `metaBGConf` and the bar in `metaBGConfInv`, the reverse of a yoRadio conf. `_apScreen()` and
   `_sdmanScreen()` draw `_bootConfig.apTitleBGConf` and ignore *invert title*, so a setup screen is independent of the
   selected layout (its text geometry already came from `_bootConfig`). `conf_tool.py` normalises an imported pair by
@@ -1133,6 +1347,17 @@ thinks the radio forgot everything. The loader-side wait (`plans/network-recover
   `PLAYER`/`SCREENSAVER`: a widget left visible would be painted once by the page pass and then sit frozen for the
   whole wait - including the common case where the index is valid and no counter ever appears. Leaving the mode
   redraws the clock in full, because `_layoutChange()` prints it when a widget comes back from hidden.
+- **A re-index that is not the boot scan owns the panel through a QUEUED hold.** `SDINDEXSTART` / `SDINDEXDONE`
+  (`common.h`) bracket it: the File Manager's close-time walk and `SDManager::trySdRemount()` send START *before* their
+  `NEWMODE SDCHANGE`, and DONE both clears the flag and performs `_switchMode(PLAYER)` in one display-task action.
+  `_switchMode()` refuses every mode except `SDCHANGE` while `_indexHold` is up, naming the refused mode in one
+  `[Warning]`. The flag had to live on the display task rather than in `FileManager`: an out-of-task flag would still
+  be set when this task processed the walk's own final PLAYER request, and the guard would refuse its own exit. This is
+  what stops the scan screen vanishing a split second into a walk - the walk pumps `player.loop()` for its whole
+  duration, so a play that finally starts, a `PR_CHECKSD` resume, `WiFiReconnected()` or the `returnPlayer()` ticker
+  can all queue a `NEWMODE` in that window, and the counter is only sent while the mode is `SDCHANGE`, so the count
+  stopped with the screen. Both requests are exempt from the queue's drop-on-full rule (they retry for
+  `DSQ_CRITICAL_WAIT`), because a dropped DONE would leave every later mode change refused and the controls inert.
 - Main responsibilities:
   - initialize rendering task and widgets
   - mode switching (`PLAYER`, `VOL`, `STATIONS`, `LOST`, `UPDATING`, screensaver)
@@ -1144,6 +1369,35 @@ thinks the radio forgot everything. The loader-side wait (`plans/network-recover
   - reads `network` time/weather, `player` status
   - title changes now directly trigger `rgbled.trackChange()` and `backlightControls.restart()` instead of a weak hook
 
+## `src/core/playlistvalidator.cpp`
+- Owns the WebUI **Playlist Validator**: a sequential stream check driven from the main loop (the task that owns
+  the audio object), never from a second task.
+- `start()` stops playback synchronously, mutes via `Audio::getVolume()`/`setVolume()` (not the `Player::mute()`
+  toggle), sets the title indicator and queues `NEWMODE VALIDATING`; `loop()` walks the stations one at a time -
+  `Utility::loadStation(id)` then `Audio::connecttohost(url)`, so a redirect passes and a 404/connect failure
+  fails. A failure is retried up to `PLAYLIST_VALIDATE_ATTEMPTS`; a pass listens `PLAYLIST_VALIDATE_LISTEN_MS`
+  (both in `options.h`). `stop()` and the natural finish share one `_restore()` - unmute, clear the title, put
+  the saved station back and return to `PLAYER`.
+- Progress is reported over the WebSocket as **`PLVALIDATE`** (`{"plvalidate":{"start":1,"count":N}}`,
+  `{"plvalidate":{"i":N,"r":"pass"|"fail"}}`, `{"plvalidate":{"done":1}}`), read live from the module in
+  `NetServer::processQueue()`.
+- While active it owns the panel: `VALIDATING` is a dialog mode that reuses the OTA progress bar, `Controls`
+  ignores input, `commandhandler` refuses **every command except `plvalidate` and the read-only `get*` getters**
+  (a whitelist, so a command added later is refused by default) while blocking `plvalidate` itself in
+  HTTP/MQTT/Telnet, `audiohandlers` drops station/title/error updates so incoming metadata cannot paint over the
+  indicator, and `Player::loop()`'s stream-death branch is suppressed.
+- `_restore()` calls `Display::clearProgress()` so the progress bar - which lives on the shared dialog page the
+  volume overlay reuses - is blanked on both a natural finish and a Cancel.
+- `updateProgress()` clamps the ratio into 0..1 **before** the `float` -> `int` cast and bounds the bar width to
+  its own `char buf[68]`. Without the clamp the conversion is undefined for an out-of-range or NaN ratio, so GCC's
+  `-Wstringop-overflow` cannot bound the `memset` size and reports a hypothetical ~4 GB one; the width bound is
+  needed because the 2..64 clamp it would otherwise rely on is applied to the `int _updBarWidth` member in
+  `_showDialog()`, another function.
+- The panel indicator is localized: `L10N_LBL_VALIDATING` (`"VALIDATING"`, `display/en_US.json`) is used by
+  `display.cpp`'s `VALIDATING` branch, and the WebUI meta string comes from `Player::validatingLabel()` - an
+  accessor because `playlistvalidator.cpp` must not include `dsplocale.h` (a second copy of every locale table).
+  The WebUI keys carry English fallbacks in the sources and are translated by the maintainer's tools (Rule #8).
+
 ## `src/core/netserver.h`
 - Declares request enums, websocket/server globals, `StaticFileCache` class, `CachedFile` struct, and NetServer API.
 - `StaticFileCache` — PSRAM-backed cache for static WebUI files (files from `Config::wwwFiles[]`).
@@ -1151,7 +1405,12 @@ thinks the radio forgot everything. The loader-side wait (`plans/network-recover
 - Contains embedded fallback HTML templates (`emptyfs_html`, `index_html`, `emergency_form`).
 
 ## `src/core/netserver.cpp`
+- HTTP sleep queries treat `sleep` as an optional wake-up duration and `after` as an independent delay before
+  deep sleep (both minutes); an omitted or zero wake duration leaves the timer wake source disabled. The HTTP
+  handler folds the two into one comma-encoded `sleep=sfor,after` command and skips the bare `after`.
 - HTTP + WebSocket + upload/update + search/curated orchestration.
+- **`PLVALIDATE`** (a new `requestType_e`) carries the Playlist Validator's progress: start/count, one `{i, r}`
+  per station, then done. See `src/core/playlistvalidator.cpp`.
 - **The theme editor's API sits at the end of `handleNotFound()`, behind `#if defined(DSP_TFT) || DBGWUI`.**
   Eight routes serve `/editor.html` and nothing else links to them: `GET /theme-elements.json` (one object per
   element — its key and its label — in table order), `GET /themeall.json` (every id, empty slots included, because the editor's source
@@ -1164,9 +1423,23 @@ thinks the radio forgot everything. The loader-side wait (`plans/network-recover
   writes what a save would have written, so feeding it back through Save restores the slot. `POST /xtheme`
   also takes an optional **`use=0`**, which writes and installs the slot *without* selecting it; that is what
   the page's bulk import uses, because ten sequential saves would otherwise leave the device sitting on the
-  last theme imported. The routes sit outside the WebUI's `group_*` conventions on purpose: the page is
-  unlisted and only it consumes them. The two exports exist because the slot files are the only copy of a
-  custom theme, and a LittleFS reflash takes all ten with it.
+  last theme imported. The routes sit outside the WebUI's `group_*` conventions on purpose, and only the page
+  consumes them: the options page's Danger Zone links to `/editor.html`, but it calls none of these. The two
+  exports exist because the slot files are the only copy of a custom theme, and a LittleFS reflash takes all ten
+  with it.
+- **The layout editor's API follows it, behind `#ifndef DUMMYDISPLAY`.** `GET /layout-elements.json` (the
+  groups plus one object per `LayoutData` field — its key, label, type, group, flags and its own cells),
+  `GET /layoutall.json` (every id, `""` for an empty slot), `GET /layoutactive.json` (the layout in use plus the
+  editor's own `widgetsEditor` switch, which is runtime-only and so has to come back with the layout),
+  `GET /layoutdata.json?id=N`, `POST /layoutapply`, `POST /editorwidgets` (`on=0|1`), `POST /xlayout`
+  (`action=save|delete`, with the same optional `use=0`), `GET /xlayout.json?slot=N` as
+  `ehRadioLayout-<name>.json` and `GET /xlayoutall.json` as `ehRadioLayouts-Backup.json`, plus `GET /conf.js` — the
+  build's conf constants and the two flags the page
+  hides its halves with. The guard differs from the theme half on purpose: a layout is a set of pixel positions
+  rather than a palette, so an OLED uses it too, and only a build with no display is out — which is exactly
+  where `layoutregistry.cpp` compiles nothing. A save or an apply is refused when the document names another
+  panel size (`"screen"` against `DSP_WIDTH`x`DSP_HEIGHT`) or when a `CONF_REQUIRED` field is empty; a widget
+  merely off the panel edge is accepted, because only the page can judge whether that was deliberate.
 - **`/themeall.json` sends an empty string for a slot that holds nothing, not a label.** The editor's two
   dropdowns describe the same slot differently — the source has to say "this is a custom slot", the target
   has to say "this is already taken" — so the decoration is the page's job and the firmware sends only the
@@ -1190,8 +1463,6 @@ thinks the radio forgot everything. The loader-side wait (`plans/network-recover
   - `handleNotFound`: checks PSRAM cache first for GET requests, cache-busting `?v=` stripping removed (max-age=60
     handles freshness)
   - `handleIndex`: serves `player.html` from PSRAM cache for `GET /`
-  - HTTP sleep queries treat `sleep` as an optional wake-up duration and `after` as an independent delay before
-    deep sleep; an omitted or zero wake duration leaves the timer wake source disabled
   - route handlers (`/`, `/search`, `/update`, `/locale.json`, `/ready`, etc.)
   - `/visuals.json` — the VU style list, built **at request time** from one static `{ id, label, needsPcm }` table, so
     the WebUI select can only offer what the running build can draw: waveform and Lissajous are omitted on a VS1053
@@ -1215,19 +1486,33 @@ thinks the radio forgot everything. The loader-side wait (`plans/network-recover
   - radio-browser click reporting holds the queued click while the startup services are pending instead of letting the
     heap check drop it. `processRadioBrowserClick()` leaves `clickDelayActive` set and re-tests every pass, capped at
     `RADIO_BROWSER_SEND_CLICK_DELAY + rbClickServicesWaitMs` (60 s, the same protection `Mqtt::servicesWaitLimitMs`
-    gives its re-apply). The services run on this very core and hold the DRAM, so a spawn inside that window was
-    refused as `low heap, refusing rb click task spawn` on every boot that played a radio-browser station. The click is
-    still dropped outright while the card is off limits (`PM_SDCARD`, or the SD File Manager) - the older
-    `Abandoning click` rule, extended to the manager.
+    gives its re-apply). The click is still dropped outright while the card is off limits (`PM_SDCARD`, or the SD File
+    Manager) - the older `Abandoning click` rule, extended to the manager.
+  - **the gate is the contiguous block, and nothing else.** The services were never the peak: the first page load took
+    one boot from 140844 free to 9 KB free / 2 KB largest, and this task's 8 KB stack plus a TLS handshake were being
+    started straight into it. So the spawn is dropped - not held - when `heapCanAffordTls(rbClickTlsMinBlock)`
+    (40 KB contiguous, the `ESPFILEUPDATER_MIN_HEAP_FOR_SSL` figure) says the handshake cannot fit; the log carries
+    both numbers. The old `ESP.getFreeHeap() <= MIN_MALLOC` test (24 KB of *total* free) could not answer a
+    contiguity question, which is what let the lookup start against a fragmenting heap.
+  - **There is deliberately no time window.** A 30 s "WebUI quiet" hold existed briefly and was removed: it was
+    purely wall-clock from `NetServer::begin()` (never a dependency on a browser, despite how the log line read), it
+    expired too late to protect a page load opened at 30.5 s and too early for one opened at 29 s, and it delayed a
+    played-station statistic by half a minute on a device nobody visits. The block check is the real protection and
+    it costs nothing when the heap is healthy.
   - the RSSI payload carries the raw dBm (`rssi`, kept for the bars' tooltip) and the bar count (`rssibars`, from
     `rssiLevel()`), so the WebUI holds no scale of its own
-  - `GETBATTERY` sends `volt: NmV, percentage: N%`. When `BATTERY_FORCE_DISPLAY` is defined it synthesises that same
-    string instead of reading `Battery` - percentage clamped, voltage interpolated across the presence window - so the
-    WebUI battery row can be laid out with no battery fitted
+  - `GETBATTERY` sends `volt: NmV, percentage: N%`. While `widgetsEditorEnabled` is on it synthesises that same
+    string at a flat 50% instead of reading `Battery`, voltage interpolated across the presence window, so the WebUI
+    battery row can be laid out with no battery fitted. `BATTERY_FORCE_DISPLAY` was removed for it: that macro was
+    only ever the widget-testing switch, and this one does not need a rebuild
 - Coupling:
   - uses `cmd.exec(...)` from commandhandler
   - emits JSON consumed by `data/www/script.js`
   - `GETSCREEN` now also carries `invtitle`, `layout`, `theme` **and `vustyle`** fields for WebUI dropdown state
+  - `GETSCREENSAVER` is the Screensaver category's own payload - it carries `scre`..`scrpeak` plus `scrtimer`
+    and `scrtimeout`. `GETSCREEN` keeps only the Screen values, and `script.js` requests both on page load.
+    `getscreensaver` is blocked for HTTP/MQTT/Telnet like the other getters and is in the playlist-validator
+    passthrough whitelist.
   - Virtual endpoints `/themes.json` and `/layouts.json` serve dropdown data from PROGMEM arrays; `/visuals.json` is the
     first *runtime* one (built per request, not from PROGMEM), and the WebUI loads it through `loadVisuals()` +
     `populateNamedDropdown('vustyle', data)`
@@ -1237,17 +1522,31 @@ thinks the radio forgot everything. The loader-side wait (`plans/network-recover
 - OTA note:
   - OTA start/end/error callbacks use `FUNCTIONLOG`.
   - OTA progress now uses `FUNCTIONLOG` (line-oriented output, no raw `\r` streaming path).
+- **`GETACTIVE` carries `group_tft` on the TFT class** (`#if defined(DSP_TFT) || DBGWUI`, the guard the theme routes
+  themselves use, because `DSP_TFT` is exactly the build where a theme can be edited). The options page's editor
+  button carries it on the two label divs that make its wording, so the button reads "Theme Editor & Layout Editor"
+  where it is emitted and "Layout Editor" alone on a mono build. The token is emitted inside the
+  `network.status == CONNECTED` block like every other display group, so in SoftAP the editor link is not offered.
+  **The name is a deliberate reuse:** `group_tft` was deleted in the font-overhaul round, where it meant "not the
+  dummy display" and could never be false on a real build - see [`plans/font-overhaul.md`](../plans/font-overhaul.md).
 
 ## `src/core/commandhandler.h` / `commandhandler.cpp`
 - `commandhandler.h` declares command execution API for command strings.
+- **`DSP_TFT` / `DSP_OLED` exist only in a translation unit that includes `../displays/dspcore.h`,** the driver
+  dispatcher that defines them from `DSP_MODEL`; `display.h` does not pull it in. The `theme` command guards its
+  `display.applyTheme()` with `#if defined(DSP_TFT)` because OLED has no display palette (there the id is only the
+  WebUI choice). That guard once sat in this file without the include, so it was silently false on a TFT too: the id
+  was saved and the dropdown moved, but the panel kept its colours until the next full state apply - which is why a
+  font change appeared to "apply" a theme that had never been applied. `DBGWUI` is a local `#define` inside
+  `GETACTIVE` in `netserver.cpp` and is always 0 in any other file.
 - The three screensaver-composition commands (`screensavertext`, `screensavervu`, `screensavervustyle`) are the
   only members of the screensaver family that also ask for `GETACTIVE` again, because they change which rows
   the Screen section shows. `GETACTIVE` sends `group_vu_ss` unconditionally inside the VU `#if` (the VU
   Screensaver checkbox, which needs no VU box in the layout), `group_vu_ss_style` only while `screensaverVU`
   is on (the style picker *and* the meter's own peaks/axis switch, which share the group because both belong
   to the screensaver's meter), and withdraws `group_full_time` while it is on; `group_vu` keeps its own
-  meaning, "the active layout has a VU box". `GETSCREEN` carries `scrtext`, `scrvu`, `scrstyle` and
-  `scrpeak`.
+  meaning, "the active layout has a VU box". `GETSCREENSAVER` carries `scrtext`, `scrvu`, `scrstyle`,
+  `scrpeak`, `scrtimer` and `scrtimeout`; the Screen values stay in `GETSCREEN`.
 - `screensavervupeak` is deliberately not `vupeaks`: `screensaverVUpeak` is a store of its own, and the
   widget reads it through `VuWidget::_vupeak()` whenever the instance is the pinned one - the same split
   `_style()` makes for `screensaverVUStyle` against `vustyle`. It owns the peak markers and every axis or
@@ -1265,6 +1564,29 @@ thinks the radio forgot everything. The loader-side wait (`plans/network-recover
   governing one off the screensaver should not be up at all - and that exit is the route that resets
   `screensaverTicks`/`screensaverPlayingTicks`. The cost is the panel clear a rebuild goes through, one full
   blit of black before the rebuilt picture; that clear is what owns the whole panel when a box shrinks.
+- The Screensaver settings are their own reset category: `defaultSettings("screensaver")` holds every
+  `screensaver*` default plus the two deep-sleep settings, while `defaultSettings("screen")` keeps only the
+  Screen ones. Both branches end with `GETACTIVE` for the layout-driven groups (`group_full_time`,
+  `group_smaller`, `group_vu_ss_style`), which depend on Screensaver values too. The value payloads are
+  separate - `GETSCREEN` for Screen and `GETSCREENSAVER` for Screensaver - so the all-reset order no longer
+  decides which defaults the WebUI sees. The Screensaver branch queues an `SSREBUILD` while the device is
+  asleep so the reset is visible at once.
+- **`sleeptimer` / `sleepSsTimeout`: a deep-sleep timer beside the screensaver timers.** `sleeptimerenable` and
+  `sleeptimeout` (5..1080 minutes) are the only screensaver commands that do not call `screensaverHelper()`,
+  because the picture does not change. `config.sleepTicks` is a third idle counter: `ticks()` increments it
+  while `store.sleeptimer` is true and the device is in `PLAYER` or the screensaver, and calls
+  `utility.doSleepW()` once it passes `sleepSsTimeout * 60 + SCREENSAVERSTARTUPDELAY`. It does not wait for a
+  screensaver to appear and neither screensaver enable switch gates it, so a 5-minute sleep timeout with a
+  120-minute screensaver timeout deep-sleeps first, while 30 against 5 deep-sleeps 30 minutes from the same
+  start rather than 35. The block is inside `#ifndef DEEP_SLEEP_DISABLE`, and `GETACTIVE` offers the rows
+  through `group_deepsleep` without looking at the screensaver switches. While `filemanager.active()` is true,
+  `ticks()` holds all three counters at 0 every second: SD File Manager mode has its own `SDMAN_AUTO_EXIT_MS`
+  timeout, and that exit is what lets the countdowns resume.
+- **All three idle counters reset together.** `Config::resetScreensaverTimers(value)` sets
+  `screensaverTicks`, `screensaverPlayingTicks` and `sleepTicks`; the six existing reset sites call it
+  (`ticks()` on a connecting stream, IR presses, `screenSaverExit()` and `touch()` with 0; `_switchMode()` and
+  a station start with `SCREENSAVERSTARTUPDELAY`). The two sleep commands still zero `sleepTicks`, so enabling
+  or changing the value starts a fresh countdown.
 - Central command router for WS, URL params, MQTT, and telnet fallback paths.
 - Main responsibilities:
   - map `key=value` commands into config/player/display/network actions
@@ -1324,15 +1646,123 @@ thinks the radio forgot everything. The loader-side wait (`plans/network-recover
   per-file report and a summary, and install only on `Update ...? [y/N]`; declining offers to delete the temps;
   `--dry-run` writes the same temps but never installs. `--clean` is idempotent - a second run reports every file
   unchanged.
-- Import mode keeps the old format's behaviour: `BOOMBOX_STYLE` yields two entries with `.boomboxVU = true` on the
-  BoomBox one; `HIDE_*` zeroes a config and keeps the original commented beneath it; `HIDE_IP_ONLY_MAIN_SCREEN` and
-  `RSSI_DIGIT` become `true` switches; the `BITRATE_FULL`/`TITLE_FIX` block is stripped and substituted; an obsolete
-  `fadespeed` sixth value is dropped from `bandsConf` (a sixth plain integer only, so an expression is never lost); OLED
-  targets get `metaBGConf`/`metaBGConfInv` swapped; and anything the source did not provide is written as `{ }` with `//
+- Import mode keeps the old format's behaviour: `BOOMBOX_STYLE` yields two entries, the BoomBox one with `vuConf`'s
+  `align` set to `WA_CENTER` by `force_vu_boombox()` (it used to emit `.boomboxVU = true`); `HIDE_*` zeroes a config and
+  keeps the original commented beneath it; `HIDE_IP_ONLY_MAIN_SCREEN` and `RSSI_DIGIT` become `true` switches; the
+  `BITRATE_FULL`/`TITLE_FIX` block is stripped and substituted; an obsolete `fadespeed` sixth value is dropped from
+  `bandsConf` (a sixth plain integer only, so an expression is never lost); OLED targets get
+  `metaBGConf`/`metaBGConfInv` swapped; and anything the source did not provide is written as `{ }` with `//
   <--------- NEEDS EDITING!`.
 - Docs: [`conf_tool.md`](../src/displays/conf/conf_tool.md) covers both modes,
   [`layout_key.md`](../src/displays/conf/layout_key.md) documents every field and now states the write-every-field and
   keep-the-headers rules.
+
+## `src/displays/conf/conf_index.h`
+- **The conf file's own table, described for the layout JSON parser and the editor page.** `dspcore.h` includes it at
+  its TAIL, after the driver chain, because the `CONF_*` names at the bottom are the selected conf file's macros
+  (`DSP_WIDTH`, `DSP_HEIGHT`, `TFT_BORDER`, `MAX_WIDTH`, `SCROLLDELAY`, `SCROLLTIME`, `BOOTLOGOTOP`).
+- **`CONF_HAS_CONF_MACROS` is guarded on `DSP_TFT` / `DSP_OLED`, not on `DUMMYDISPLAY`.** Those two are what prove a
+  conf file was included; in a build with no display there is no `TFT_BORDER` or `MAX_WIDTH` to read, so every
+  constant falls back to 0.
+- **Seven shapes, one per struct** — `CT_WIDGET`, `CT_SCROLL`, `CT_FILL`, `CT_BITRATE`, `CT_BANDS`, `CT_MOVE`,
+  `CT_BOOL` — each with its own cell list in `_confCells[]` / `_confCellCounts[]`, indexed by `confType_e`. It is seven
+  rather than two because `bandsConf`, `moveConf` and `fullbitrateConf` share no cell with a widget or a scroll.
+  `CT_BOOL` is one number under the field's own key and has no cells; a cell's `kind` is a number box, the align
+  dropdown, or a checkbox.
+- **`_confFields[]` is every member of `LayoutData`, in declaration order, each carrying `offsetof`.** The offset comes
+  from the struct, so a field and its reader cannot drift, and the order is the order of both the designated
+  initialisers in the conf files and the cards on the editor page.
+- **`LAYOUT_FIELD_COUNT` in `widgetsconfig.h` is asserted against the table** (`CONF_FIELD_COUNT`), so adding a
+  `LayoutData` field fails the build here rather than orphaning a key in every layout file already on disk. It is **30**:
+  round 4 removed `boomboxVU` and `rotateVU` (the VU's orientation is `vuConf.align` now). Flags: `CONF_REQUIRED`
+  (`metaConf`, `playlistConf`), `CONF_FONT_INDEX` (`numConf`, `clockConf` — fontsize is a clock size index there, so 0
+  is meaningful), `CONF_OUTLINE_FRAME` (the two sliders), `CONF_ALIGN_ORIENT` (`vuConf` — its align cell renders as the
+  Orientation dropdown Default / Boombox / Rotate 90 rather than Left / Centre / Right), and `CONF_CELL_BIT` (the
+  per-cell unused marker, so a fill stops offering a font size and an align).
+- **No notation is ever stored.** The constants exist so the page can state the panel's own numbers and validate a
+  value against the panel. Round 8 removed the last two ways notation could leak back: the per-cell macro tooltip
+  (the values are now one line under `Display type`) and `conf_tool.py`'s revival of a number into a macro name,
+  which is why a `bandsConf` cell meaning "how many bands" could come back as `TFT_FRAMEWDT`. `plans/layout-editor.md`
+  carries the reasoning and the alternatives.
+
+## `src/displays/layoutregistry.h` / `layoutregistry.cpp`
+- **`widgetsEditorEnabled` is the editor's own switch, and it is runtime-only.** It is a file-scope `bool` in
+  `display.cpp`, **defined ABOVE the `#ifndef DUMMYDISPLAY` block** — not inside it, because `netserver.cpp`'s
+  `GETBATTERY` reads it and that route exists in every build, display or not — `extern` in `widgetsconfig.h`
+  because `widget_vu.cpp` reads it too, and a reboot clears it - so a
+  session cannot leave the device showing a battery it does not have. It lifts the three hardware gates that would
+  otherwise hide a widget the user is trying to position: battery (`battery.isInitialized()` and the 50% fake),
+  weather (`_weatherHidden()` returns false), and the VU (`vuLive()`/`vuDraws()` treat the meter as on AND
+  `VuWidget::_style()` returns `VU_STYLE_BARS`, because a layout is laid out against the bar). `POST /editorwidgets`
+  sets it and queues `APPLYSTATE`, since a gate the display task cannot see has to be re-inited to move.
+- **The layout registry: one flat list of ids serving the compiled `_layouts[]` table and ten user slots**
+  reserved for `/data/layout1..10.json`. Same shape as the theme registry, and the same reason for it —
+  `config.store.layoutId` is persisted, so the id set has to be stable and "is anything at this id" must be
+  a separate question from "how many ids are there". Readers ask for a COPY or a name, never for the table.
+- **`layoutCount()` is the compiled table plus `LAYOUT_SLOT_COUNT` (10), always.** `layoutFilled(id)` is the
+  only test a caller needs before using an id; `layoutName(id)` returns `""` past the end; `layoutCopy(id,
+  dst)` returns false and writes nothing for an empty slot, so a caller can keep what it had rather than
+  apply a zeroed layout. A slot is filled when its name is non-empty — the loader supplies a default name
+  for a file carrying none, so that one test cannot disagree with "a file was read successfully".
+- **The compiled table's length is a file-local constant rather than a macro**, because `_layouts[]` and
+  `_layoutNames[]` exist only where the conf file was included: this header has to stay includable without
+  them. A build with no display has neither, and the whole implementation sits behind `#ifndef
+  DUMMYDISPLAY`, where `display.h`'s own stub class answers instead and never reaches this file.
+- **`layoutCount` is no longer a global variable** (`widgetsconfig.h` no longer declares one, and
+  `display.cpp` no longer defines one). `Display::getLayoutListJson()` caches on `layoutGeneration()` the
+  way the theme list caches on `themeGeneration()`, and the list is **sparse** — filled ids only, keyed by
+  the real id — which is what lets `options.js` show a saved layout with no JavaScript change. The loop it
+  replaced indexed `_layoutNames[i]` for `i < layoutCount`, which would have read past that array once the
+  count grew past the table's length.
+- **Storage cost, measured:** ten `LayoutData` is 3920 bytes, because `sizeof(LayoutData)` is **392** —
+  `enum WidgetAlign` has no fixed underlying type, so it is 4 bytes rather than 1. With ten 33-byte name
+  buffers the slots cost about **4.25 KB of RAM**, and the second copy of the selected conf table that this
+  translation unit includes costs about **1.6-2.0 KB of ROM**. Giving the enum `: uint8_t` would return
+  roughly 800 B of the RAM.
+- **One document shape, one parser, one writer, and the theme files' own rule: known keys, missing keys zeroed.**
+  `layoutParseDoc()` reads `{ "name", "screen", "layout": { "<field>": { "<cell>": n } } }` and `layoutDocFor()`
+  writes it back by hand, so the keys come out exactly as `conf_index.h` spells them. The parser is liberal where
+  the theme one is: the records may sit at the top level instead of under `"layout"`, and a cell is written by
+  INDEX into the type's cell list, so the shape of a record lives in exactly one place and the clamps are the
+  storage's own widths (a `uint8_t` cell cannot hold 300, and `MoveConfig::width` is signed).
+- **`screen` is checked, and a mismatch makes the slot read as EMPTY.** A document naming a different panel size
+  is a set of pixel positions for another screen, so it is refused at load and again at Save and Apply; a
+  document carrying no `screen` at all is accepted, because that is what a hand-written file looks like.
+- **The two-phase resolve is the theme one, and `layoutValidId()` is why it must be.** `Config::loadLayout()` runs
+  from `_initHW()` before LittleFS is mounted, so a custom id cannot be judged there; `Startup` reads the slots
+  after the pruning, re-resolves, and persists the correction when it changed.
+- **`layoutRequiredOk()` answers the one question a layout can fail** — whether a `CONF_REQUIRED` field is empty,
+  which today means `metaConf` or `playlistConf`. `layoutStaging()` is the one scratch layout a preview is parsed
+  into; `layoutSaveSlot()` writes the whole document and installs it in RAM at once, so a save reaches the
+  display task without a reboot, and a short write REMOVES the file rather than leaving a half layout behind;
+  `layoutDocForAllSlots()` is Backup All — the filled slots in order, or one slot's own document when exactly one
+  is filled.
+- **`Display::_applyState()` takes an `applyMode_e` instead of a bool**, because the two previews stage different
+  halves: `APPLY_STAGED_THEME` takes the staged colours and keeps the stored layout, `APPLY_STAGED_LAYOUT` takes
+  the staged layout and keeps the live theme. A single "in place" flag cannot say which half is staged, and
+  reading the stored one on a preview path is the bug the first theme preview shipped.
+- **One document shape, one parser, one writer, and the theme files' own rule: known keys, missing keys zeroed.**
+  `layoutParseDoc()` reads `{ "name", "screen", "layout": { "<field>": { "<cell>": n } } }` and `layoutDocFor()`
+  writes it back by hand, so the keys come out exactly as `conf_index.h` spells them. The parser is liberal where
+  the theme one is: the records may sit at the top level instead of under `"layout"`, and a cell is written by
+  INDEX into the type's cell list, so the shape of a record lives in exactly one place and the clamps are the
+  storage's own widths (a `uint8_t` cell cannot hold 300, and `MoveConfig::width` is signed).
+- **`screen` is checked, and a mismatch makes the slot read as EMPTY.** A document naming a different panel size
+  is a set of pixel positions for another screen, so it is refused at load and again at Save and Apply; a
+  document carrying no `screen` at all is accepted, because that is what a hand-written file looks like.
+- **The two-phase resolve is the theme one, and `layoutValidId()` is why it must be.** `Config::loadLayout()` runs
+  from `_initHW()` before LittleFS is mounted, so a custom id cannot be judged there; `Startup` reads the slots
+  after the pruning, re-resolves, and persists the correction when it changed.
+- **`layoutRequiredOk()` answers the one question a layout can fail** — whether a `CONF_REQUIRED` field is empty,
+  which today means `metaConf` or `playlistConf`. `layoutStaging()` is the one scratch layout a preview is parsed
+  into; `layoutSaveSlot()` writes the whole document and installs it in RAM at once, so a save reaches the
+  display task without a reboot, and a short write REMOVES the file rather than leaving a half layout behind;
+  `layoutDocForAllSlots()` is Backup All — the filled slots in order, or one slot's own document when exactly one
+  is filled.
+- **`Display::_applyState()` takes an `applyMode_e` instead of a bool**, because the two previews stage different
+  halves: `APPLY_STAGED_THEME` takes the staged colours and keeps the stored layout, `APPLY_STAGED_LAYOUT` takes
+  the staged layout and keeps the live theme. A single "in place" flag cannot say which half is staged, and
+  reading the stored one on a preview path is the bug the first theme preview shipped.
 
 ## `src/displays/themeregistry.h` / `themeregistry.cpp`
 - **The theme registry: one flat list of ids serving two sources.** Ids `0..12` are the compiled `_themes[]`
@@ -1380,11 +1810,11 @@ thinks the radio forgot everything. The loader-side wait (`plans/network-recover
   it carries newer colours for the same repaint and a torn read could only mix two of the user's own palettes.
 - **A knowingly accepted cost:** the built-in tables are `const` at namespace scope, so including `themes.h`
   here makes a second copy for this translation unit (about 2 KB of flash). Giving them one definition would
-  mean restructuring a header that `importtheme.py` generates into.
+  mean restructuring a header that `theme_tool.py` generates into.
 
 ## `src/displays/themes.h`
 - Runtime theme switching data, loaded from PROGMEM at runtime.
-- `ThemeData` struct: 38 `uint16_t` colour fields + `playlist[5]` — 43 in all, and it mirrors `config.h`'s
+- `ThemeData` struct: 37 `uint16_t` colour fields + `playlist[5]` — 42 in all, and it mirrors `config.h`'s
   `theme_t`, which is what lets `memcpy` carry one into the other.
 - `const ThemeData _themes[] PROGMEM` — array of theme presets (default + imported), reached only through the
   theme registry.
@@ -1402,11 +1832,11 @@ thinks the radio forgot everything. The loader-side wait (`plans/network-recover
 - **Every colour in `_themes[]` is written on the 565 steps** — `level * step`, so red and blue are
   multiples of 8 and green of 4, the same numbers `editor.html` shows. This is a spelling of the same colour
   and not a change to it: `(r >> 3) * 8` packs back to the same 565 that `r` did, so the 502 literals
-  `importtheme.py --quantise` moved in the shipped file compiled to a **byte-identical firmware** in all
+  `theme_tool.py -q` moved in the shipped file compiled to a **byte-identical firmware** in all
   three environments.
-- Populated by `importtheme.py`, which takes either an old-style `#define COLOR_*` file or a WebUI JSON
+- Populated by `theme_tool.py -i`, which takes either an old-style `#define COLOR_*` file or a WebUI JSON
   export (one theme or a whole backup), routes both through the same fallback rules, and snaps everything it
-  writes onto those steps. See [`importtheme.md`](../src/displays/importtheme.md).
+  writes onto those steps. See [`theme_tool.md`](../src/displays/theme_tool.md).
 - **`.line` and `.vuaxis`: the two entries with no old-format source, both derived from `.div`.** `line` sits between
   `.div` and `.weather`, `vuaxis` between `.weather` and `.vupeak`, and their place in the entry is fixed because the
   entries are designated initialisers. The rules are part of the palette now, not values to eyeball: **`.line` =
@@ -1439,8 +1869,8 @@ thinks the radio forgot everything. The loader-side wait (`plans/network-recover
     `_pages`, so nothing in a sub-page can be self-updating - which is why the footer holds only bars and text.
   - **`outlined` in `FillConfig` now means the shape for a fill, and still means "frame plus inset" for the two
     sliders.** `FillWidget::_draw()` (`widgets.cpp:31`) reads it and draws `drawRect` instead of `fillRect`, in the same
-    colour the widget was constructed with - `theme.line` for the two reference lines, `theme.metafill` for the meta
-    band and the boot band, `theme.plcurrentfill` for the playlist highlight - and leaves the interior alone on purpose,
+    colour the widget was constructed with - `theme.line` for the two reference lines, `theme.metabg` for the meta
+    band and the boot band, `theme.plcurrentbg` for the playlist highlight - and leaves the interior alone on purpose,
     because a frame that cleared its inside would erase the widgets it exists to enclose. `false` is what every conf in
     the tree writes, so no existing layout changed; and since a rectangle one pixel thick is its own outline, `outlined`
     does nothing visible to a hairline, which is the one thing to tell a layout author. `SliderWidget::init`
@@ -1452,14 +1882,15 @@ thinks the radio forgot everything. The loader-side wait (`plans/network-recover
     the corrected comment without any change to `conf_tool.py`.
   - **`metaBGConfInv` is consumed by a pointer swap, not by a second widget.** When `config.store.inverttitle` is on,
     `_applyState()` re-points `metaBGConf_ptr` at `metaBGConfInv` (falling back to `metaBGConf` when the inv conf is
-    empty) and, on TFT, sets `config.theme.metafill = config.theme.div` first - so the single band widget is
-    re-initialised from the inv geometry and drawn in the divider ink, which makes it read as the rule under the station
-    name instead of a band. What is dead is the exported `metaBGConfInv_ptr`: it is assigned in three places (the
+    empty) and the single band widget is re-initialised from the inv geometry drawn in `config.theme.line` - so it reads
+    as the rule under the station name instead of a band. What is dead is the exported `metaBGConf_ptr`'s sibling
+    `metaBGConfInv_ptr`: it is assigned in three places (the
     initialiser, the null block for builds without a display, and `_setLayoutPointers()`) and never read, because the
     swap goes through `metaBGConf_ptr`. Recorded, not fixed.
 
-## `src/displays/importtheme.py`
-- Imports old-style `#define COLOR_*` theme files into `themes.h`.
+## `src/displays/theme_tool.py` - the import mode (`-i`)
+- Imports old-style `#define COLOR_*` theme files and ehRadio JSON exports into `themes.h`, **and** writes
+  the `themes.css` block that entry belongs to, so the two sides of a theme never arrive separately.
 - Handles `#ifdef`/`#ifndef` branching to generate multiple theme variants (permutation).
 - Smart fallbacks for missing colors (e.g., `.dow` ← `.date`, `.battery` ← `.rssi`).
 - Meta fallback for everything else (uses `.meta` color instead of zeros).
@@ -1469,7 +1900,220 @@ thinks the radio forgot everything. The loader-side wait (`plans/network-recover
   `DERIVED_RULES`, which exempts them from the `// needs fixing?` marker that every other computed fallback keeps. They
   are rules, not guesses; the rest are still eyeballed.
 - Name truncation at 31 chars for `_themeNames[][32]`.
-- `--dry-run` writes to `.new.h`.
+- `-n` sets the starting index; without it the entry is appended after the last one.
+- **`--fix` is `--import`'s mirror and edits in place.** `-i` appends an entry and invents or confirms its name;
+  `-f` replaces the *values* of ONE entry that already exists and takes the name from `_themeNames[index]` instead
+  of asking - `--name` is ignored there and `_themeNames[]` is never written. `replace_theme_entry()` splices
+  `emit_theme_entry()`'s output over the span `parse_entries()` reports, re-terminated with the file's own EOL,
+  because the emitter builds with `\n` and `write_text()` does not translate. The input must hold a single theme: a
+  `Backup All` array is refused, since a fix replaces one slot. `themes.css` is left alone unless the closing
+  `[y/N]` prompt is answered yes, which calls `sync_one_block()` - `build_palettes` → `theme_deltas` →
+  `collapse_families` → `render_block` for that id alone, replacing the block or adding it if themes.css lacks one.
+  That is the one case where re-deriving after a hand edit is right: the entry just corrected is the newer truth.
+- **`parse_entries()` spans begin at the entry's indentation, never at the preceding line terminator.** The pattern
+  `(?m)^\s+\{\s+//` is matched against a *slice* of the file, so `^` can match at a leading newline and `\s+` then
+  swallows it; the start is advanced past any `\r`/`\n` before it is recorded. Every consumer splices with these
+  spans, so this is load-bearing: a span that includes the previous terminator welds two entries into
+  `},    {   // Name` the moment the entry is replaced - which is what `--fix` did before the normalisation, and
+  nothing noticed because the file still compiled and every colour was still right. `mode_delete()` consumes the
+  terminator as a unit (`\r\n` or `\n`), since taking only the `\n` of a CRLF leaves a stray `\r` and eating every
+  terminator in sight welds the neighbours. `mode_audit()` reports any entry whose start is not preceded by a line
+  break, with the line number and whether it shares the line with the `_themes[]` declaration or the entry before.
+
+## `src/displays/theme_tool.py` - the palette files and the other modes
+- **Three files hold the palette.** `data/www/style.css` keeps `:root` - the hand-authored design, its nine
+  families and their aliases - plus every rule, and *imports* `data/www/themes.css` on its first line.
+  `themes.css` holds one `:root[data-theme="N"]` block per display theme, each a short list of what differs from
+  `:root`, and nothing else. `src/displays/themes.h` stays the authority for how many themes exist and their
+  names. Nothing writes `:root`; every tool treats `style.css` as read-only input.
+- **`--theme-name` is a declaration, not a comment**, because a page can read a stylesheet's VALUES but never its
+  text. It is what lets `webui_tool.html` list the themes, and therefore what lets that page rebuild the file
+  without ever seeing it. `themes.h` wins whenever the two disagree: `-i` rewrites every `--theme-name` from it
+  on each run.
+- **One file, one set of readers and writers**: paths, EOL-preserving read and write,
+  `parse_master()`, `parse_blocks()`, `render_block()`, `render_file()`, `apply_edits()`, alias resolution,
+  `ROLE_ORDER`, `find_families()`, `collapse_families()`, the `themes.h` readers, and the sync check. Three
+  scripts import it, so no two of them can disagree about how a file is read or written.
+- **`check_sync()` is the contract, `require_sync()` is the door.** The blocks must be exactly
+  `0 .. len(_themeNames)-1`, in order, no duplicates, no gaps; anything else is a hard stop that names the ids and
+  tells you to hand-edit until they line up. A name that differs is a warning and never a stop, because themes.h
+  is the authority and the name is only a cache. A bare run (or `-a`) is exactly this report plus the quantise
+  status and nothing else; every other mode calls the same check before touching anything.
+- **`:root` is the anchor.** A block is a diff against `:root`, so there is no second reference to name:
+  no `--anchor` flag, no `mode=`/`anchor=` marker, no empty-block convention - block `[0]` carrying declarations
+  is normal. To retune the design: `--inflate`, edit `:root`, `--deflate`.
+- **Maintenance modes**, over `themes.css` with the master from `style.css`, never reading
+  `themes.h`: `--inflate` gives every block every role it lacks, at the colour it **already has in that block**,
+  never the master hex, so a head's cascade survives being frozen; `--deflate` drops every declaration whose
+  resolved value is exactly the `:root` one; `--deflate-lossy` does the same within `NEAR_MASTER`, one `[y/N]` per
+  role per theme, default No. `--dry-run` reports instead of writing. Run over a canonical file `--deflate` must
+  report nothing to do - that is the file's form check.
+- **`--inflate` then `--deflate` returns the file byte for byte**, given the file is already in the canonical
+  alphabetical form every tool writes. It is not a no-op on a hand-ordered block: it normalises the order, which
+  is the one thing a round trip can change.
+- **Declarations are alphabetical everywhere, and there is no sort mode.** `ROLE_ORDER` is alphabetical and
+  `render_block()` writes `sorted(props)`, so every block any tool creates or rewrites is alphabetical, including
+  hand-added properties. `:root` is the one exception by design: grouped by family (standalone first, then
+  `surfaces`, `edges`, `fills`, `outlines`, `highlights`, `actives`, `labels`, `infotexts`, `maintexts`),
+  alphabetical inside each group.
+- **The nine `:root` family heads are NOT roles, but a block may declare one.** `ROLE_ORDER` lists members only,
+  so no palette is generated for a head. `find_families()` derives the map from `:root` itself - a head is a name
+  another declaration points at that is not a role - so a hand-added family needs no list maintained anywhere. A
+  theme can write `--outlines: #e3d25f` and move seven outline roles in one line, and `--deflate` folds members
+  back into that line (the value most of them agree on wins; a member that differs stays declared as a deliberate
+  split).
+- **Values may be `var(--other)`.** `resolve_value()` follows aliases block-first and then `:root`, so every
+  comparison is on hex; a block that spells out `#262626` where `:root` says `var(--fills)` is redundant.
+- `validate_props()` **checks that every palette declaration begins its line** (indentation only) and fails with
+  the file and line number and the offending prefix. A stray character in front of `--role:` makes the
+  declaration invalid CSS that the browser drops silently - the role then falls back to its alias, which presents
+  as a colour that "does not apply" and is otherwise a long hunt.
+- There is no lock and no `--update` any more: a theme is finished by not editing it, and every mode processes
+  every block. The three hand-owned colours (`--page-bg`, `--list-bars`, `--playlist-hover`) are never generated,
+  because no display theme carries a colour meaning "the browser window" or "the zebra stripe".
+
+## `src/displays/webui_tool.html`
+- Dev-only **theme builder and sampler**: one page showing every kind of coloured element from the player,
+  playlist editor, settings (Controls), search, curated lists, IR recorder and the equaliser popup, plus the
+  loader/progress states, with the whole palette beside it. Fake data; the only script is the builder described
+  below, and it never
+  touches `style.css`. It exists because a palette edit in DevTools dies on page navigation (the next page
+  reloads the stylesheet) and because a theme block is the real deliverable.
+- **Three columns on a wide screen:** a sticky help column (`.helpcol`, 420-560 px, with its own scrollbar)
+  carrying the text and the variable table, and `.samples` split into two page columns (`.sample`), the playlist
+  editor spanning both because `#pleditor` needs 880 px. Under 1580 px the samples fold to one column; under
+  980 px the help moves to the top and stops being sticky. Each sample is its own `.pagewrap` app column, so the
+  page-bg shows between them; `.narrow` keeps settings/search/curated at 580 px and the editor centres at 960.
+- **The help note is folded away by default**, because the explanation is not what you open the tool for: `#whyq`
+  (the "Why does this file exist?" line) toggles `#whybody`, which wraps everything from the first paragraph to the
+  table. Hovering underlines it and brightens it to `#ffffff`, and a caret (`\25B8` / `\25BE` from CSS content)
+  reports the state, because the two hover hints cannot.
+- **A sample is a `div`, never a `section`, and its frame is hardcoded.** `style.css` has a bare `section {}` rule -
+  the settings card, with a `--panel-border` ring, card padding and
+  `background-image: linear-gradient(--panel-background, --panel-gradient)` - and `section` exists nowhere but
+  options.html's cards and editor.html's `#themebox`/`#laybox`. While the frames were `<section class="sample">`
+  they inherited that wash, which read as if the whole WebUI were gradiented. The Settings sample keeps its real
+  `section#group_controls`, so the gradient is still previewed where it actually appears. The frame is a fixed
+  `#323232` ring on a `#000` cell (`--page-bg` holds `#000000` by default and is hand-owned), so no palette
+  variable paints a frame - the same rule as the help column: the instrument never borrows the subject's colours.
+- The real pages are exactly one screen tall and scroll their own boxes, so the harness relaxes a few heights -
+  `#playerwrap`, `#equalizerwrap`, `#playlist`, `#pleditor`, `#pleditorcontent`, `#settingswrap`, `#searchcontent`,
+  `#curatedcontent` go `height: auto`, the two lists are capped at 340 px, and `#pleditorwrap` becomes
+  `position: static` (on the device it is an absolute overlay). Those rules are layout only and define no colour.
+- Links the real stylesheet (`../../data/www/style.css`) and carries **no `data-theme`**, so the page's base is
+  the real `:root` and theme 0 is just another slot - it is not the default and its notes say nothing special.
+  The loader sets that attribute for one synchronous read and restores it.
+- **The dropdown is the block a save writes; Load only fills the table from it.** Two separate things: `CURRENT` is
+  where the colours on screen came from (set by Load, cleared by Reset), while the *slot* is
+  `parseInt(themePick.value)` - whatever the dropdown names, whether or not Load was pressed. `blockText()` takes the
+  slot's id and `--theme-name`, `allValues()` skips the slot when it reads the other blocks, and `buildFile()`
+  injects `modelDeltas()` into the slot, so retargeting moves the box's header and the save's destination together
+  and never touches the colours. That is what makes "load a palette you like, pick the block to overwrite, Save"
+  work. The box used to hardcode `X` and a placeholder name because it had no way to know which block it was, and
+  `themePick`'s `change` handler only cleared the note; it now repaints the box. The loadnote says where a save
+  would land whenever the slot is not `CURRENT`, that being the one moment it lands somewhere the colours did not
+  come from.
+- **The tool's own chrome is hard-coded on purpose.** The help column, the table, the output block and the sample
+  captions are the instrument, not the subject: they read `--tool-*`, a fixed dark palette declared in the harness
+  `<style>`. They used to borrow the theme, and theme 6 (black text on a light page) made the editor unreadable
+  mid-edit. Everything inside `.pagewrap` - every sample - and the circle fills still come from `style.css`, so the
+  preview is still the real thing. The IR remote graphic is the one sample that is fixed by the stylesheet itself,
+  and the recorder rows beside it are palette-driven in both states, so the button roles are compared pressed
+  against unpressed. The **equaliser popup** (`#equalizer` and its four bands) is a sample of its own beside the
+  Player: on the device `#equalizerbg` is an absolute overlay inside `#playerwrap`, and an **id rule beats any
+  class**, so a `.sampler-eq` override never applied and the popup simply covered the player. It is now
+  `#samplereq`, a framed panel that takes the free grid cell to the right of the Player (the editor spans both
+  columns, so that cell is empty), with inline slider gradients like the player's own volume bar. It is the only
+  place `--eq-label-text` is ever painted, and it also shows `--meter-fill` / `--meter-track` and the `.fb` OK.
+- The sample markup reuses the production ids and classes (`#playerwrap`, `#playlist`, `#pleditor`,
+  `#settingscontent`, `#searchcontent`, `#curatedcontent`, `#irremote`, the `.gb`/`.fb`/`.pleitem` families). Both
+  dropdowns carry real data: the thirteen names from `_themeNames[]` and real `timezones.json` pairs. The IR sample
+  shows the recorder forced open with two rows, one `.irradio.active` + `.irrecordvalue.active` and one at rest, so
+  the pressed and unpressed key colours are judged side by side.
+- The table in the help column is also the editor. It lists all 62 declarations grouped the way `:root` is: the
+  nine standalone colours first, then the nine families, each opened by a bold head row (`tr.fam[data-head]`)
+  with its members beneath (`tr[data-role]`), one combined line each saying where it shows and what it does.
+- **The circles are the controls.** Every row carries a `button.circle` (a head's has a double ring), coloured
+  from the live palette, and it opens one shared `<input type="color">` parked at the circle that was clicked.
+  The choice is written as an **inline custom property on `<html>`** - the strongest origin, one element below
+  `:root` - so the preview repaints while every rule, hover and layout still comes from `style.css`; **Reset
+  all** just removes those properties. Reading the starting colours is `getComputedStyle`, with a `var()` walk
+  for a browser that hands back the token stream instead of the substituted value.
+- **The lock rule is the collapse rule.** Setting a head (`state.heads`) locks the family and clears its member
+  splits; setting a member (`state.members`) splits only that member and marks the row `splitrow` with an arrow
+  that rejoins it. When fewer than two members still follow a head, its colour is handed to the last followers
+  and the head is forgotten - which is why the copied block drops the head line at exactly the same point
+  `theme_tool.py --deflate` would.
+- **Two arrows per row, and the ROW decides what each resets.** `button.rejoin` &#8635; goes back to `:root`,
+  and `paint()` reveals it by adding `setrow` to the row. `tr[data-head]` clears the head **and** every split in its
+  family; `tr[data-role]` clears that one role. The key is read from the row's own `data-head` / `data-role` -
+  **never from a second attribute on the button**, because a rename then has one place to go wrong instead of two
+  (the first version kept `data-reset="text2"` beside `data-head="infotexts"` and the arrow silently looked for a
+  head that no longer existed). The standalone roles have no group colour to reset, so each keeps only its own
+  arrows beside its own circle. **`setrow` follows any override** - standalone included - while `splitrow` needs a
+  family to be split from. Family head rows are boxed - `tr.fam td` draws top and bottom, the first and last cell
+  close the ends - so a group reads as a sub-heading.
+- **`button.reload` &#9100; is the second undo: back to what the loaded theme gave the row.** `LOADED` is a
+  `{heads, members}` snapshot taken at the end of `loadTheme()`, refreshed after a save, and cleared by
+  `Reset all to :root` - so it always means "the last file in or out", and the arrow disappears when nothing has
+  been loaded. `paint()` adds `loadrow` when `valueIn(state, name) !== valueIn(LOADED, name)`, and `valueIn()`
+  resolves member, own head, family head, then `:root`, so a split, a head line and plain inheritance compare
+  exactly as `valueOf()` paints them. On a head row `reloadFamily()` restores the head line the theme carried, or
+  the individual splits it had, rather than one head colour. **Where the block never named a role the two arrows
+  coincide** - the loaded value IS the `:root` one - which is correct rather than a bug. Both arrows sit after the
+  circle and are `display: none` until their row class appears, so one showing never moves the circle.
+- **A jump is marked by a rainbow, not by an accent colour.** `jump()` rings the element it lands on with
+  `.jump-hit`, whose `jump-rainbow` keyframes step the hue 60 degrees at a time for three 0.8 s cycles while the
+  glow and the outline offset pulse with it; the class lives 2.5 s. The ring is deliberately a colour no palette
+  can contain, because `--tool-accent` sat close enough to a theme's own colour to be mistaken for it. A repeat
+  jump restarts the animation (class off, forced reflow, class on) and clears the element's own `jumphitTimer`, so
+  a second click cannot inherit the first one's deadline. `prefers-reduced-motion` drops the animation and keeps a
+  still magenta ring. An outline takes no space, so none of it disturbs the layout it is pointing at.
+- **Copy / paste uses a clipboard of the page's own, and the pair belongs to one row.** Hovering a `td.sw` makes
+  that row `hot` - a 3 s timer refreshed by movement *inside the cell*, so reaching for the icon beside the circle
+  does not hide it, and hovering another swatch moves it there - which reveals `button.clipbtn` (&#128464;).
+  `button.pastebtn` (&#8614;) waits for `#roles.hasclip`, set by the first copy, and Esc empties the clipboard.
+  Both carry no name: `tr.dataset.role || tr.dataset.head` decides, as with the reset arrow. Their two slots are
+  reserved with `visibility: hidden`, never `display`, because a pair that appeared on hover would shove the
+  circle sideways under the pointer aiming at it. A copy reads `valueOf()` (what the circle shows, so a follower
+  copies its family colour) and a paste goes through the same `setValue()` the picker's `input` handler calls, so
+  the head lock and the last-follower collapse are written once and cannot drift. The clipboard colour is also
+  published as `--clip` on the table, and while `hasclip` holds it is the **paste** arrow's glyph colour, with a faint
+  white glow so a near-black value stays readable on the tool's dark panel. **The copy chip keeps the tool's dim
+  grey** - a copy icon drawn in the colour read as if it held one itself, which is what made the pair confusing.
+  Hover lights the chip's border in `--tool-accent` exactly as the reset arrow does, and leaves the glyph alone so
+  the colour stays visible.
+- **Cancel is a real cancel, and accept wins the race.** A native colour dialog fires `input` on every drag (that
+  is the live preview) but `change` only when it is accepted, so the circle click snapshots `{heads, members}`,
+  `input` marks the session dirty (an `input` whose colour equals the current one is ignored - opening the dialog
+  can fire exactly that), and `change` accepts it. The close is seen on `blur`, on `window.focus` and on an
+  outside `pointerdown`, but those can arrive **before** `change`, so the rollback is deferred one 200 ms tick and
+  abandons itself if `session` has been replaced in the meantime; a session that is still clean (nothing dragged)
+  is never rolled back at all, which keeps an early blur from killing the preview. Every path ends in `apply()`.
+- **A line must say something.** `blockText()` drops any line whose colour equals the one that role would inherit
+  *without* that line - `defaults[head]` for a head, the printed head (or `defaults[member]` when no head line is
+  printed) for a member - so a value left behind by a cancelled picker, or a lock that happens to match `:root`,
+  never reaches the pasted block. The single-follower case still emits the follower explicitly, and only when it
+  differs from its own default, so "all but one unlocked" keeps working.
+- **Clicking a name jumps** to the first element that uses that colour: a `LOOK` map of role -> selector, a
+  head falling through to one of its members, and `#samples .sample` as the last resort. Each sample also has an
+  id for deep links: `#sample-player`, `#sample-eq`, `#sample-editor`, `#sample-settings`, `#sample-search`,
+  `#sample-curated`, `#sample-ir`, `#sample-states` (prefixed because the production markup already owns `#search`).
+- **The loader takes a numeric id, not a list.** No theme names live in the page: it cannot read a linked
+  stylesheet's rules on a `file://` page and `themes.h` is not reachable, so a hardcoded list would rot as soon as
+  a slot appeared. Typing an id and pressing Load sets `data-theme` for one synchronous read of all 65 names,
+  restores the attribute, and rebuilds the state by the same rule the tool uses (the value most of a family's
+  members agree on becomes the head, the rest stay split) - so a head-using theme loads short. The note reports
+  how many colours differed, or that the id came back as the `:root` palette (no block, or an empty one).
+  **Reset all to :root** clears the state, which is exactly "the root numbers". **Copy to Clipboard** emits
+  `:root[data-theme="X"] { /* Name here - and replace the X! */ ... }`, with `execCommand` as the fallback when
+  the async clipboard is unavailable on a `file://` page.
+- The logo is a **snapshot of `data/www/logo.svg` inlined** into `#logo`, not an `<img>`. The SVG paints itself with
+  `var(--logo)`, `var(--logo-shadow)` and `var(--logo-text)`, and only an inline SVG inherits the page's custom
+  properties - an `<img>` is a document of its own, which is why the device inlines it in `loadLogoThen()` too. It
+  appears once, in the Player sample, which is enough to judge the three logo roles; if the artwork changes, paste
+  the new file over the logo block again.
+- Never served: it lives outside `data/www` and is not in `Config::wwwFiles[]`, so it cannot reach the firmware image.
 
 ## `src/core/controls.h` / `controls.cpp`
 - `controls.h` declares `class Controls` with public interface: `init()`, `loop()`, `setEncAcceleration()`,
@@ -1555,7 +2199,7 @@ thinks the radio forgot everything. The loader-side wait (`plans/network-recover
 - **Publishing is state-driven and settled, not request-driven.** `loop()` compares the live values (station id, the
   derived state token, name, title, artwork URL) against two stored `StatusSnapshot`s - `reported` (what the broker
   holds) and `candidate` (the current combination, waiting to settle) - and publishes the candidate only once it has
-  stayed unchanged for `MQTT_STATUS_SETTLE_MS` (`options.h`, 1500 ms). A station switch mutates those inputs at
+  stayed unchanged for `MQTT_STATUS_SETTLE_MS` (`mqtt.cpp`, 1500 ms). A station switch mutates those inputs at
   different moments - the index moves in `utility.loadStation()`, the title becomes `[connecting]`, the stream's ICY
   headers overwrite the name, artwork and title land last - so publishing every combination would tell consumers stories
   that were never true for longer than a moment (the classic one: the new station name carrying the previous station's
@@ -1703,8 +2347,21 @@ thinks the radio forgot everything. The loader-side wait (`plans/network-recover
       layer of wrapping quotes, and the `play` value-shape handling (`play` alone becomes `start`, `play <url>` becomes
       `burl`)
   - playlist CSV parsing and station lookup/load helpers
+  - **`playlistLength()` derives the SD count from the index file - `(size - 8) / 4` - and opens and closes it on every
+    call**, so it is not free on the main loop: `player.next()`, `player.prev()`, `loadStation()` and `findStationByUrl()`
+    all call it, plus the web handlers. **It returns `uint16_t`, which is what caps the library at 65,535 tracks - and at
+    65,536 the count wraps to 0**, so the radio sees an *empty playlist* rather than a truncated one. **Capped on
+    2026.10.26** by `MAX_PLAYLIST_ENTRIES` (`config.h`): `playlistLength()` clamps to it and warns once, and the three
+    places that could create a row past it stop instead - `SDManager::listSD()` (stops adding to `sdplaylist.csv`/
+    `sdindex`), `SDManager::_countAudioFilesRecursive()` (so the footer count still matches what was indexed and the
+    card does not re-index every boot), `Utility::indexPlaylist()` (stops reading `playlist.csv`) - and the WebUI add
+    endpoint refuses the 65,536th station rather than computing `cs + 1 == 0`. The index footer already stores the count
+    as 4 bytes, so the file format is not the limit; widening to `uint32_t` means `playlistLength()`,
+    `config.countStation`, `config.lastStation`, the `PR_PLAY` payload and the web/display station ids. **Widening
+    deliberately deferred on 2026.10.25** - see `plans/shuffle-without-repeats.md`.
   - WiFi credential parse/save/import helpers
-  - deep-sleep entrypoints (`doSleepW`, `sleepForAfter`)
+  - deep-sleep entrypoints (`doSleepW`, `sleepForAfter`); `doSleepW()` is also reached from `ticks()`'s
+    deep-sleep timer (`sleeptimer` / `sleepSsTimeout`, 5..1080 minutes)
   - standby helpers `stopStandby()`, `startStandby()` and `toggleStandby()` (shared by the `stopstandby`, `startstandby`
     and `togglestandby` commands and the IR power button); `startStandby()` also calls `network.cancelStreamRetry()`
   - LittleFS file-maintenance helpers shared with startup and WebUI update paths:
@@ -1880,11 +2537,20 @@ thinks the radio forgot everything. The loader-side wait (`plans/network-recover
   nothing walks the card while the manager is open. They are one object in two files, and dropping only the index is how
   a valid index came to sit beside a truncated playlist, which SD mode then read as an empty card; the index has to go
   too for the rebuild to trigger, because its absence is the test `initSDPlaylist()` runs first. `FileManager::loop()` -
-  which `main.cpp` calls whether or not the mode is open - then does the walk: `SDCHANGE` with the same
-  wait-for-the-mode handshake `changeMode()` uses, a forced `config.initSDPlaylist(true)`, a `PLAYLIST` notification,
-  back to `PLAYER`. A session of a hundred deletes therefore costs one walk instead of a hundred, the walk is visible on
-  the counting screen, and no request handler blocks the AsyncTCP task on it. If the card left the slot in the meantime
-  the bit is simply dropped.
+  which `main.cpp` calls whether or not the mode is open - then does the walk: `SDINDEXSTART` + `SDCHANGE`, a retry and
+  a named `[Warning]` if that handshake does not arrive, a forced `config.initSDPlaylist(true)`, a `PLAYLIST`
+  notification, then `SDINDEXDONE` back to `PLAYER`. A session of a hundred deletes therefore costs one walk instead of
+  a hundred, the walk is visible on the counting screen (see the display section: the hold is what keeps it there), and
+  no request handler blocks the AsyncTCP task on it. If the card left the slot in the meantime the bit is simply
+  dropped.
+- **One walk, one visible path.** `SDManager::indexSDPlaylist()` is single flight: a second caller is refused and logged
+  (`_indexing`, cleared on every exit by a guard object), because two callers exist - this block and the WebUI playlist
+  save at `PLAYLISTSAVED` - and both write the same temp pair, so a mixed swap was possible. `Player::_play()` refuses
+  while `filemanager.rebuilding()`, the way it already refuses while the manager is open: a play reads the card the walk
+  is writing, which is what the presence probe reports as a removed card. And the player's own "File not found"
+  self-heal no longer walks the card on the player task - it could run beside this block, and its own `SDCHANGE` came
+  and went within one pump of `player.loop()` - it now calls `filemanager.markCardChanged()` and lets this block pay the
+  debt on its one visible path.
 - **The walk announces itself, and that announcement is a boolean - the player page never has to guess.**
   `PLAYLISTREADY`
   used to mean only "the list is settled"; it now carries `filemanager.rebuilding()`, so one message covers both ends of
@@ -2364,7 +3030,7 @@ thinks the radio forgot everything. The loader-side wait (`plans/network-recover
     the row after it out of step. (3) The listing spinner is now the page's own spinner scaled to a list row rather
     than a size of its own, so there is one spinner treatment in the UI, not two.  SCALING IT DOWN REQUIRES DECLARING
     ITS PADDING, and that was a follow-up field bug: the manager's loader is spans INSIDE a `.pleitem`, so it inherits
-    `.pleitem span`'s `padding: 0 8px` and `--odd-bg-color` box, and with the universal `box-sizing: border-box` an
+    `.pleitem span`'s `padding: 0 8px` and `--control-bg` box, and with the universal `box-sizing: border-box` an
     18px box cannot hold 16px of padding plus a 6px ring - the browser widens the border-box to about 22px while the
     height stays 18px, so the ring renders as an ELLIPSE (round at the player's 40px, oval here, from identical rules).
     The manager's markup is the difference: player.html's loader is a DIV outside any `.pleitem` (`script.js`), the
@@ -2461,7 +3127,7 @@ thinks the radio forgot everything. The loader-side wait (`plans/network-recover
   `not_active` - a batch destroyed by our own timer, with the log naming an idle timeout that had not happened.
   `hDone()` had always refused to close over an upload; the timer did not, and that asymmetry was the bug.
 - **The one close allowed over an open upload is guarded by `_upInWrite`.** Closing a `File` another task is inside
-  is the cross-task hazard the log ring was fixed for, so the stall branch does nothing while a write is executing -
+  is the cross-task hazard that `lfs_file_seek` asserts on, so the stall branch does nothing while a write is executing -
   it marks the reason (`stalled`) so the transfer ends deterministically at its next step, and a genuinely wedged
   write is left to the task watchdog, which `sdFeedWatchdog()` feeds *outside* the write and which will therefore
   reset the device by itself. A locked manager is the better failure there; a corrupted handle is not.
@@ -2767,9 +3433,8 @@ thinks the radio forgot everything. The loader-side wait (`plans/network-recover
   already used for its DRAM/decoding reasons, since the manager is rewriting the card and a download starting on the
   network core is the last thing it wants. All five exist so the manager is the only thing touching the card while it
   is open. The park is released by itself when the manager closes, Done button or idle timeout alike, within one
-  2-second poll, and while it is held `Startup::loop()` marks the boot stable after
-  `STARTUP_ASYNC_SERVICES_DELAY + BOOT_STABLE_TIME` with the reason `startup services were suspended` — the same
-  rule that now covers SD playback, see the startup section.
+  2-second poll. Holding it no longer has any bearing on the boot-stable proof: that counts from the WebUI coming
+  up (`_webUpMs`), which happens whether the services are parked or not - see the startup section.
 - The encoder guards drain rather than only returning: `encoderChanged()` is a delta-since-last-call, so skipping it for
   a whole session delivers every detent turned meanwhile as one `int8_t` delta on the first loop after the mode closes,
   i.e. a volume slam or a phantom station step. The long-press-stop guard also clears `lpId`, because `Controls::loop()`
@@ -2864,9 +3529,192 @@ thinks the radio forgot everything. The loader-side wait (`plans/network-recover
 ---
 
 ## WebUI Per-File Map (`data/www`)
-- **`editor.html` — the theme editor, and the only unlisted page.** It is reached by typing the URL; nothing
-  links to it, and it deliberately does not follow the WebUI's `group_*` conventions or load `theme.css`
-  (its colour fields must show the theme's values, not the WebUI's palette). Its script is inline, per the
+- **`player.html` carries the Playlist Editor and, in the same DOM, the Playlist Validator.** A `validator`
+  class on `#pleditorwrap` hides the play/Ovol columns and the Replace/Merge/Export/Share buttons and reveals a
+  Status column and Check All Streams, all through CSS so `submitPlaylist()`'s input indexing and `plRemove()`'s
+  `span[1]` lookup are untouched. The hide rule must outrank `.pleitem span { display:flex }` or the Status cell
+  shows in the editor - which it did; it is now `#pleditorwrap .plestatus` and the cell is centred both ways.
+  The mode is toggled from the settings gear while the editor is open, and each icon shows the mode you are
+  **in** (list icon in the editor, check icon in the Validator); closed, it is the settings gear again. Closing
+  - X or Save - resets the mode (`resetValidatorMode()`: classes, title, marks, running state) and updates the
+  gear only **after** the wrap is hidden, or the next open came up already in Validator with a toggle that was
+  "unaware". `script.js` marks each row from the `PLVALIDATE` events; a failure also ticks the row's checkbox and
+  appends a localized `(URL broken?)` to its Name once, so a saved list records the fault. While a sweep runs the
+  Check All Streams button becomes **Cancel** (`plvalidate=0`) and is the only control left active - every other
+  validator control is locked by the `validating` rule. In the Validator, Add is hidden (`pl-editor-only`); Save
+  and Undo return to **editor mode** instead of closing the overlay (editor mode still closes as before), while
+  the X still leaves to the playlist; and during a sweep the settings gear - the left-hand mode switch, outside
+  `#pleditorwrap` - is locked through `body.plvalidating`, as is `#toggleplaylist` in the toolbar, leaving Cancel
+  as the only active control. The editor list now carries `background-attachment: local`, so its striped
+  background scrolls with the rows like `#playlist`'s does. In the Validator the rows are not reorderable (the
+  `.grabbable` handle is `pointer-events:none` and `startDrag()` refuses) and the header's select-all checkbox is
+  hidden, leaving only the per-row boxes. The five new keys (`ttl_playlist_validator`,
+  `btn_pl_validate`, `btn_pl_cancel`, `lbl_status`, `msg_url_broken`) live in the **sources** with English
+  fallbacks; the locale files and the localization tools are the maintainer's (Rule #8), so the keys stay
+  untranslated until those tools are run. The editor's Name/URL columns are a **13:7 flex ratio** at the base rule
+  (URL ~35%) rather than a fixed 300px Name with URL taking the remainder, and the header Status cell uses the row
+  cell's `flex: 0 0 46px` treatment so it cannot shrink away. `clearValidationStatus()` is deliberately scoped to
+  `#pleditorcontent .plestatus`: the header cell carries `.plestatus` too, and a document-wide selector emptied its
+  "Status" label (the reserved space with no text).
+- **`editor.html` holds two sections, and each hides itself.** `conf.js` carries `editorThemes` (false on an OLED,
+  where there is no palette to edit) and `editorLayouts` (false in a build with no display, where there is no
+  registry behind the routes). The page added no locale keys, like the half it grew from.
+- **The layout half is the conf file's own structure: one card per `LayoutData` field.** The field table comes
+  from `GET /layout-elements.json` — each field's type, its own cells in the conf file's order, its group heading
+  and its flags — so the page draws a scroll as ten boxes, a slider as seven, a switch as one, and keeps no list
+  of its own that could drift. Cells hold NUMBERS and nothing symbolic is ever stored: the constants from
+  `conf.js` are used only to LABEL a value that happens to equal one (the cell's `title` reads `304 = MAX_WIDTH`)
+  and to mark a `left` or `top` that falls off the panel. **The numbers the user types are clamped to the panel**
+  (`cellMax()` / `clampEdited()`): `left` to `width-1`, `top` to `height-1`, a `width` to what is left after `left`,
+  a `height` to what is left after `top`, and the codec badge's `dimension` to the smaller of those two rooms. The
+  same limit is published as the input's own `max`, so the spinner and the browser's validation agree with it.
+  **The clamp runs only on the cell the user edits** - `fillLayout()` calls `paintLimits()` alone and `resetCard()` /
+  `clearCard()` call `onLayoutEdit()` with no event - so a value that came IN from a document is left exactly as it
+  is and the red outline still marks it, which is what keeps two shipped confs intact: `displayTFT220x176` scrolls its
+  meta/playlist/weather lines in a `DSP_WIDTH+10` window, and `displayTFT240x240round`'s volbar bleeds one pixel below
+  the bottom. A cell whose remaining room is not positive answers no limit at all rather than 0, so an already-
+  over-panel value cannot be forced to zero by clamping its width. The same source/target pair as the theme half:
+  "Load layout" lists every id and previews what it loads, with a **Reload** button beside it (and beside "Load
+  theme") that re-reads the source already selected. It is the very call the dropdown's own `change` handler makes,
+  so it behaves exactly like re-picking that profile - the way back from a mess of edits without having to choose
+  something else first - and it deliberately discards the unsaved edits, as re-selecting does,
+  "Custom Layout" only chooses where Save writes. `Save` blocks on one thing only — an empty `metaConf` or
+  `playlistConf`, which the device refuses too, because that is the one way this feature could break the device's
+  own screens — and the clock and number cards get a `fontsize` capped at 4 with its own hint, since 0 there
+  means the system font rather than "off". Export, Backup All and Import are the theme half's rules with the
+  layout's names, and a restore still packs into the FREE slots only.
+- **The layout half's switch, Reset and Clear, and the empty mark.** "Enable All Widgets for Editing" sits under
+  the Custom Layout row and is the ONLY control that is not the document: its state comes back from
+  `GET /layoutactive.json` and every press goes to `POST /editorwidgets`, so two pages open at once cannot
+  disagree about which widgets are being shown. **Round 5 made it a pair**: *Temporarily turn on …* and
+  *Temporarily turn off …* over the same ten settings (Weather, VU, VU Peaks, Battery, Invert Title, Clock Glow,
+  Paged Playlist, All Caps, Volume Page, Audio Buffer Bar), two to a row and mutually exclusive on the page. It is
+  the page's access to the device's `widgetsEditorForceOn` / `widgetsEditorForceOff`. Every theme element row and every layout
+  card carries the same pair of buttons — Reset (`\u238C`) and Clear (`\u1F5D1`, with a margin so it cannot be hit
+  by accident). **Reset copies the document the Load dropdown last produced** (`LOADED` / `LLOADED`, cached at
+  fill time), not what the device is using now, which is what makes it "undo my edits"; a key the document leaves
+  out resolves to zero/black, the device's own rule. **Clear writes zeros** — for a layout field that is not a
+  delete, it is an empty widget, which is also what the device draws for one. A card whose field is empty is shown
+  greyed and struck through, using the page's own copy of `present()` (`isEmptyField()`, type by type, with the
+  clock and digits testing all four cells and `MoveConfig` exempt).  **Round 3 replaced that inference with a
+  statement** - the checkbox bullet below - so the page no longer holds a copy of the rule at all.
+- **The layout half states presence instead of inferring it.** Every card except a bool and the two
+  `CONF_REQUIRED` lines carries a checkbox, and its off position writes that field as zeros into the document,
+  so Save, Export, the preview and `conf_tool.py` all agree with no per-type guessing. The numbers stay on the
+  page while it is off, and the card is struck through - which is also what a card shows when it is ticked but
+  has nothing set to draw with. Cells the table marks unused (`CONF_CELL_BIT`: a fill's `fontsize` and `align`,
+  the VU's `fontsize`) are labelled "unused", greyed and disabled, so a rectangle stops offering a font size.
+  Reset reads the loaded document and moves the checkbox with the cells; Clear zeroes them and unticks, which is
+  "off" rather than merely "empty".
+- **The two switches reach ten settings through one helper.** `editorOpt(stored)` in `widgetsconfig.h` is the whole
+  of it: force-on wins, else force-off, else what the user stored - that if/else IS the priority, so the pair cannot
+  collide even if a stale page had both ticked. Neither flag writes `config.store`, and a reboot clears both. Its
+  readers are the settings the editor has to be able to see either way: the VU (`vuLive()`/`vuDraws()`, its style
+  pinned to Bars for force-on), its peaks (`VuWidget::_vupeak()`), the weather (`weatherLive()`, `weatherWanted()`,
+  `weatherDetail()`, `_weatherHidden()`), the battery (present and faked at 50% for force-on, absent for force-off,
+  on the panel and in the WebUI battery row), Invert Title, Clock Glow, Volume Page, the Audio Buffer bar, Paged
+  Playlist and All Caps. `POST /editorwidgets` takes `mode=on|off|none` and `GET /layoutactive.json` answers
+  `widgetsOn` / `widgetsOff`.
+- **Two build macros became options, and a third was deleted.** `PLAYLIST_MODE_PAGED` -> `config.store.playlistPages`
+  ("Paged Playlist") and `PRETEXT_ALLCAPS` -> `config.store.pretextALLCAPS` ("All Caps"); each macro stays only as
+  the boot default, so an ILI9488 still starts paged and a build that defined `PRETEXT_ALLCAPS` still starts capped.
+  Both playlist paths are compiled now and `PlayListWidget::_paged` (taken in `init()`, so APPLYSTATE re-takes it)
+  chooses at draw time; `currentTop()` is one function with both shapes and the page carries both playlist widgets.
+  `preText()` tests the flag per codepoint, and the pretext cache key **folds the flag in** - it is keyed on the
+  caller's codepoint, taken BEFORE the transform, so without that a toggle would keep serving the capped entry.
+  The WebUI never case-transforms: the All Caps option (`config.store.pretextALLCAPS`) reaches only `preText()`,
+  and the stylesheet carries no `text-transform` driven by it.
+- **The numeric signal form is a percentage, not dBm.** `Display::_setRSSI()` passes `rssiPercent(rssi)` to
+  `_rssi->setText(value, rssiFmt)`: 2% per dB from -100 (0%) up to -50 (100%), saturating at 100% above that, which is
+  the same coarse scale the five-step bar form already uses. The wording stays the conf's `rssiFmt`, so a conf shows
+  the sign with `%%` (`"WiFi %d%%"`); a bare `%` before the closing quote is an incomplete conversion and is not
+  valid - exactly as `batterytxtFmt[] = "%d%%"` already demonstrates.
+- **`conf_tool.py`'s master parse checks itself, and a comment's braces are ignored.** `Master._parse_struct()` used
+  to count braces on the raw line, but `/* MOVES   { left, top, width */` never closes its own `{`, so the scan ran
+  past the real end of `struct LayoutData` and read every later `type name;` as a member. Round 5's
+  `return stored;` was the first such line, which put a phantom `.stored` field into the conf `--fromjson` wrote -
+  a designated initialiser for a member that does not exist, so that conf could not compile. Two fixes: the count now
+  goes through `count_braces()` (which strips comments), the header comment is balanced in the master, and the parse
+  `die()`s if its field count disagrees with the struct's own `LAYOUT_FIELD_COUNT`. Note `--clean` KEEPS an unknown
+  field rather than deleting it (it reports "no master slot, kept in place"), so a stray line is a hand edit.
+- **`BOOTLOGOTOP` is never revived inside a layout.** `conf_constants()` handed it to `symbolise_number()`, so a cell
+  that happened to equal it came back as the macro name - but it is the boot logo's own anchor and its value is
+  conditional (`#if BIG_BOOT_LOGO`), so a layout spelling it would move when the boot logo option changed.
+- **A zeroed `weatherMove` now hides the line.** `_weatherHidden()` gained `yieldsNoVU` beside `yieldsToVU`, so each
+  MOVE's zeros hide its widget in the state that move governs: `clockMove`/`weatherMoveVU` while the meter is live
+  and playing, `weatherMove` while playing with it off. `applyMove()`'s `moveZeroed` guard STAYS - it is what keeps
+  the hidden widget from also being dragged to (0, 0) and drawn there before the lock erases it. That change touches
+  exactly one shipped cell: `displayTFT480x320conf.h`'s "Big Text" entry, which is `{ 0, 0, 0 }`.
+- **A MOVE that changes nothing no longer repaints.** Because an all-zero move means HIDE (the bullet above), a
+  conf spells "this state leaves the line alone" as the widget's OWN position - `displayOLED256x64conf.h` writes
+  `weatherMove = { TFT_BORDER, 64-13, 0 }`, which is exactly what `weatherConf` already gives the line.  Moving a
+  widget to where it is costs an erase and a redraw of identical pixels, and the gap between those two panel
+  passes is a background-coloured tear across the widget's span - the whole span, not just the text, because a
+  scrolling line records its span (`_spanPainted()`) as the rectangle `_clear()` erases.  That was the reported
+  "line torn through the weather's row" on every start and stop of the stream, and the start never showed it
+  because the line is still hidden then, so `if(_active && !_locked) _clear()` skips the erase - the same code,
+  one state apart.  The guard is `Widget::moveIsNoop(MoveConfig)` for a move being applied (consulted by
+  `Display::applyMove()`, after its `moveZeroed()` test) and `Widget::atBackPosition()` for the way back, which
+  retires `_moved` and returns without erasing or drawing.  `moveTo()` itself is deliberately unguarded: the
+  dialog's own `_updValue->moveTo(...)` must still be able to paint a widget that has never been drawn.  See
+  `plans/move-noop-flicker.md`.
+- **The buffer bar's `outlined` frame is visible now.** `SliderWidget`'s fifth argument is the frame colour and
+  defaults to 0 (black); the volume bar passes `theme.volbarout` but the buffer bar passed nothing, so its frame was
+  black on black. It now passes `theme.buffer`, at both the constructor and the `init()` sites.
+- **Downloads carry the panel, and an import checks it.** `dspSuffix()` (in `netserver.cpp`) appends `_TFT480x320` /
+  `_OLED128x64` to every exported name and turns spaces into underscores, so the suggestion is
+  `ehRadioLayout-Big_Text_TFT480x320.json`; `/conf.js` gained `var dspFamily='TFT'` for it and for the editor's
+  `Display type: TFT 480x320` line under the Layout Editor heading. And `importLayout()` now refuses a foreign
+  document by name (`That file is for 320x240 - this display is 480x320!`) for both a single file and a Backup All;
+  a document with no `screen` is still accepted, since that field is not something a hand-made file must carry.
+- **`weatherLive()` is the weather's one VISIBILITY gate, and the editor's switch opens it** - the same shape as
+  the meter's `vuLive()`. `_weatherHidden()` was never enough on its own: the *content* is gated separately. Round 4
+  corrected the round-3 note here, which had the symptom wrong. There are **two** questions and the switch answers
+  both without ever touching `config.store`: `weatherWanted()` (`config.store.showweather || widgetsEditorEnabled`)
+  opens the two FETCH gates in `network.cpp`, and `weatherDetail(stored)` (`stored || widgetsEditorEnabled`) pretends
+  all four detail flags for `buildWeatherString()`, so the line shown is the longest one any layout could show.
+  `LAYOUT_SAMPLE_WEATHER` is deleted - it only ever appeared because turning the switch on kicked off a real fetch,
+  so with weather off the line was visible and empty. The `/editorwidgets` route now sets `network.forceWeather = true`
+  and calls `buildWeatherString()` on the way ON (so it fetches now rather than at the next interval) and calls
+  `buildWeatherString()` again on the way OFF. Accepted consequence: a device with no API key sits on
+  `l10n(L10N_LBL_W_LOADING)`, and a real line's length varies with conditions.
+- **The VU's orientation is `vuConf.align`, and the two booleans are gone.** `boomboxVU` and `rotateVU` were two
+  `LayoutData` fields for one idea, and `VuWidget` already treated them as mutually exclusive with `align`: every
+  `_config.align` test in `widget_vu.cpp` is reached only when `!_rotate`. They are removed, `LAYOUT_FIELD_COUNT` went
+  32 -> 30, and so did the two `extern const bool*` pointers and `display.cpp`'s table entries. `WA_LEFT` is the default,
+  `WA_CENTER` the boombox form, `WA_RIGHT` rotated 90. `VuWidget::init()` reads `_rotate` from `WA_RIGHT` and `bb` from
+  `WA_CENTER`, which leaves **every `!bb` branch unreachable** — deliberately LEFT in place rather than swept, because
+  deleting them is a large edit for no behaviour change. `displayTFT284x76conf.h`'s Default was the tree's only
+  "horizontal but not boombox" meter and became boombox (the user's call). The align rewrite (8 rotated layouts ->
+  `WA_RIGHT`) was a throwaway script; `--clean` then dropped the fields from all 14 confs and re-texted the header.
+- **A fill's dead cells are `0`, and the round trip says so.** The master's two `FillConfig` headers became
+  `{{ offset, top, 0, 0 }, width, height, outlined }` and every value `{{ 0, 0, 0, 0 }, ...}`: a fill reads neither
+  `fontsize` nor `align`, and every conf wrote `WA_LEFT` (= 0) there, so it is a spelling and not a change.
+  `conf_tool.py --fromjson` follows the header - a fill's `align` cell comes back as the number, not a `WA_*` name -
+  while the VU's header keeps `align` a name, because there it is the orientation.
+- **A preview must re-apply the MOVEs, and the debounce is 3 s.** `_applyState()`'s staged branch re-applied the locks
+  but not the moves, so editing the weather while playing with the meter on drew the line at its conf position (over
+  the meter) until the next play/stop; it now calls `_layoutChange(player.isRunning())` at the top, exactly as
+  `_switchMode()` already ends. `PREVIEW_DELAY` at `editor.html` is 3000 ms, shared by both halves, raised from 1000
+  because the rush of previews could overwhelm the device and crash it.
+- **The theme grid's action column moved to the END and lost its Clear button.** An element's "nothing" is
+  black, which is what Reset already puts back, so the trash can had no separate job on that half.
+- **`paintHint()` took three arguments and one call site passed two.** `onLayoutEdit()` called
+  `paintHint(f, c.inputs[cell.key])`, so the *cell* parameter received an input element and `inp` was undefined —
+  a `TypeError` on every keystroke, thrown inside the handler, which is what killed the debounce and the live
+  preview for the layout half. Both call sites now pass `(field, cell, input)`.
+- **`editor.html` — the theme editor and the layout editor, reached by typing the URL or from the options page's
+  Danger Zone button** (`data-command="editor"`, which opens `/editor.html` in a new tab rather than replacing the
+  settings page - the one navigation in that switch that does not move the current document). Its label is split by
+  capability, the way the switch itself is: "Theme Editor & Layout Editor" where the build reports `group_tft` (the
+  theme routes' own guard, `DSP_TFT`), "Layout Editor" alone where it does not. The button sits in a
+  `hidden dangerzone` row that only the three unlock switches reveal - `checkDangerZone()` walks that class, not an
+  id - and the button itself carries `hidden group_display`, so the `act` handler unhides it only on a build with a
+  display. The two gates therefore live on two elements and neither can undo the other, which is what the nesting
+  is for: a build with no display compiles none of the editor's routes and the page would hide both of its own
+  halves there. It deliberately does not follow the WebUI's `group_*` conventions; it loads `style.css` and
+  `variables.js` like any other page, but its colour fields show the theme's own values, never the palette's.
+  Its script is inline, per the
   rule below. Two rows: "Load theme" (the source) and "Custom Theme" (the target, with Save, Delete, Export,
   Export All and Import beside it — every one of them acts on the target or the slot list, so they belong on
   its row). "Load theme" lists every id,
@@ -2933,6 +3781,16 @@ thinks the radio forgot everything. The loader-side wait (`plans/network-recover
   panel flash with a swatch and a 565 cell stuck on the old value. The panel is repainted after
   `PREVIEW_DELAY` (1000 ms) of quiet, because a preview is a full widget re-init and a colour hunt should not
   be twenty repaints.
+- **Each row's acts column reads `⇤ 🗐 ⎌` - paste, copy, reset - and the clipboard is a 565 value.** `CLIP` holds the
+  copied colour in the device's own unit, so nothing is rounded twice and what the row shows is what gets pasted:
+  copy reads `row565(i)`, and paste is `setRow(i, CLIP)` + `onEdit(i)`, which is exactly the path a typed edit takes
+  (levels, swatch, 565 cell, debounced preview). The pair is always visible - the column is long and a hover-only
+  control would be a hunt - but **the glyphs never change colour**: only the paste box under the pointer does, in the
+  clipboard's own colour (`border-color` from `--clip`, published on `#grid` by the copy), and the copy box keeps the
+  ordinary `#bbb` hover - a copy icon drawn in the colour read as if it held one itself. The arrow points **left**
+  because the cells it writes are to the left; in `webui_tool.html` the circle is to their right, so there it points
+  right. The page's message line reports the hex that was copied or pasted, which the numbers alone do not make
+  obvious.
 - **An initialiser is not a refresher, and a page must not rebuild what the user is editing.** `editor.html`
   builds its grid exactly once. After a save or a delete it refreshes only the dropdown *labels*, in place,
   by rewriting the text of the options that already exist — because the id set never changes, only which
@@ -2946,6 +3804,94 @@ thinks the radio forgot everything. The loader-side wait (`plans/network-recover
   and `curated_variables.js` stay separate because more than one page loads them. Removing a file from `wwwFiles[]` and
   from `data/www` must happen together, and firmware plus filesystem must then ship together: older firmware still lists
   the name and reports a missing file.
+- **The VU's pixel budget is told to the page, and the page spells it out.** `VU_MAX_WIDTH` / `VU_MAX_HEIGHT`
+  (280 / 140) moved from `widget_vu.h` to [`widgetsconfig.h`](../src/displays/widgets/widgetsconfig.h), so three
+  readers share one home: `vuResolveBox()`, `conf_index.h` (which lends them to the page as `CONF_VU_MAX_WIDTH` /
+  `CONF_VU_MAX_HEIGHT` through `/conf.js`'s `confDsp`, beside `dspFamily`), and a build with no display, which
+  still compiles the header. `editor.html` prints a line above the VU BANDS group - `Max Width: 280 / Max Height:
+  140 will be enforced if the VU exceeds the pixel budget. This VU uses: N / 39200 maximum pixels.` - from
+  `vuBoxResolved()`, which mirrors the device's own resolution. Informational only: nothing is clamped on the page,
+  the device has the last word. (Round 8 dropped a trailing `, so it is drawn about W x H.` from the over-budget
+  case: it described a box the widget no longer always draws, and could not be true at all for one that bails.)
+- **`Temporary On` pads the three text lines, so the widgets' widths are visible on the panel.** `Display::editorFiller()`
+  in `display.cpp` appends about one panel width of `" ~]"` (`DSP_WIDTH / 18 + 12` units, at the system font's 6 px
+  cell) to the station name and to each title half while `widgetsEditorForceOn` is set AND the stream is playing. It is
+  applied where the text is handed to the widgets (`_station()`, `_titleTexts()`), so the conf and the page stay
+  untouched, and it over-fills deliberately - a scroll widget truncates to `WIDGET_BUFF_SIZE` regardless. The centre
+  column of the two-switch row gains ", and some extra characters to titles."
+- **A zeroed MOVE comes back unticked, and `conf_tool.py` spells it `{ }`.** The card checkbox now asks "is any cell
+  set" (`anyCellSet()`, MOVEs included), while `allCellsZero()` stays the different question "would the device draw
+  nothing" - a MOVE stays exempt there, so a zeroed move is never struck through. `is_empty_field()` stopped exempting
+  `MoveConfig` for the spelling, `MOVE_EMPTY_TEXT = '{ }'` has no `// unused` comment, and `emit()` normalises a
+  `{ 0, 0, 0 }` to it - so the imported "Big Text" entry in `displayTFT480x320conf.h` came right on the next sweep.
+- **The VU's box is resolved ONCE, at load, and the widget draws what it is handed.** `vuResolveBox(LayoutData&)`
+  (declared in `layoutregistry.h`, defined in `layoutregistry.cpp`) is called from `Display::_setLayoutPointers()`,
+  the one place every copy into `activeLayout` passes through - `layoutCopy()` for a compiled conf or a LittleFS
+  slot, `layoutStagingCopyTo()` for the editor's push. Two rules, in this order: a box over the budget by AREA is
+  clamped to the 280x140 rectangle BY ITS SIDES and the clamped sides are written back into `bandsConf` (the same
+  rectangle `resolveScreensaverBox()` produces, so the player's meter and the screensaver's stopped disagreeing),
+  with `vuConf.left/top` untouched; then a box that runs past the panel (`left + boxW`, `top + boxH`) is **not
+  drawable**. `VuWidget` took a `drawable` flag (ctor/init parameter, default true) carried in
+  `Display::_vuNotDrawable`: when it is set no canvas is allocated, `ready()` is false and `_draw()`/`_clear()`
+  return immediately - but the widget stays PRESENT, so the clock and the weather still hide as though the meter
+  were there (the neighbours' gates were deliberately left alone). `VuWidget::init()`'s scale-and-recentre budget
+  block and `vuScaleToBudget()` are gone. The stored slot keeps the typed numbers, so the editor's warning still
+  has something to point at.
+- **A text size of 0 is not a size, and `layoutSanitize()` is where that is enforced.**  The cell means two
+  different things, and `conf_index.h` already records which: on `numConf` and `clockConf` it is a size INDEX
+  whose 0 IS the system font (`CONF_FONT_INDEX`), and three shipped confs ask for it - the 128x32 OLED, the
+  284x76 and the 160x80 set both to 0; on every other field it multiplies the system font's own cell.  A 0 there
+  collapses the row, and worse: the scroll widgets read `textsize == 0` as their own "init has not run" sentinel
+  (`_setTextParams()`, `_calcX()`, the scroll step), so a station-name or title line set to 0 in the editor's
+  font-size box stayed half-built and crashed the device.  `layoutSanitize(LayoutData*)`
+  (`layoutregistry.h`/`.cpp`) walks `_confFields` and, per field: skips the `CONF_FONT_INDEX` ones, so the clock
+  and the number keep 0 and those three panels are untouched; finds the fontsize cell BY NAME in
+  `_confCells[type]` (the cell lists own that order, so a second copy of its index would be the thing that
+  drifts) and skips it where the field marks it `unused` - a fill's is a literal 0 and the VU's is a presence
+  marker, and writing a 1 into an empty conf would flip `presentOf()`, which counts `textsize` as one of its
+  presence bits; clamps `0 -> 1` only where the field is already PRESENT, since that same `presentOf()` read
+  before the clamp is exactly "present, ignoring textsize", so an all-zero conf stays the spelling for an omitted
+  widget; and touches only `CT_WIDGET`/`CT_SCROLL`/`CT_BITRATE`.  It is called from `Display::_setLayoutPointers()`
+  beside `vuResolveBox()` - the one place every copy into `activeLayout` passes through - so a compiled conf, a
+  LittleFS slot AND the editor's staged push are corrected, including a slot that already holds a 0, which a
+  parser-side clamp would leave crashing on every boot.  `editor.html` sets the font-size box's own `min` to 1
+  wherever the field is not `CONF_FONT_INDEX` (and keeps `0`, `max` 4 and the "0 is the system font" title where
+  it is), and `clampEdited()` now enforces that floor as well as the panel-derived ceiling - typed or pasted, not
+  only spun.  See `plans/layout-fontsize-clamp.md`.
+- **A widget's box must be checked against the PANEL, not only against the budget.** The budget bounds an area, so
+  a box inside it can still be placed past the edge: band width 220, gap 35, `offset` 10 gives a right edge of 485 on
+  a 480 px panel. `VuWidget::_blit()` hands `setAddrWindow(offset, top, _cw, _ch)` to the driver with no edge test,
+  and the canvas is allocated at the box size, so an off-panel box can both fail to allocate (nothing ever draws)
+  and write outside the panel. That is why the bail above exists, and why `editor.html`'s `paintWarnings()` now
+  marks the `vuConf` and `bandsConf` cells that put the box past the edge - advisory only, the save is never refused.
+- **`TFT_FRAMEWDT` is `TFT_BORDER` now.** The old name said "frame width" for a value that is the edge inset - a
+  margin - so round 8 renamed it across the 16 conf headers, `conf_index.h` (`CONF_FRAMEWDT`, unchanged as the page's
+  name), `display.cpp` and `widgets.cpp`. `conf_tool.py`'s `emit_import_entry()` rewrites a community conf's
+  `TFT_FRAMEWDT` to `TFT_BORDER`, which is the only macro NAME that tool handles at all since the number→name
+  revival was removed.
+- **A widget's first cell is `offset`, and it was called `left` because that is true for one of three settings.**
+  It is the widget's distance from the edge `align` names: `WA_LEFT` gives `x = offset`; `WA_RIGHT` gives
+  `x = width - textwidth - offset` (a right margin); `WA_CENTER` makes it the left edge of the span the text
+  centres in (`TextWidget::_realLeft()`, and a scroll always brings a span), while the clock instead centres on the
+  screen and ADDS it (`ClockWidget::_getTimeBounds()`). So it is neither ignored under Centre nor symmetric. Round
+  9 renamed the member, the cell key and the label (the editor shows "Offset"); `presentOf()` followed; and the
+  twelve accessors (`.widget.offset`, `c->offset`, `_config.offset`, `wc.offset`, `apPassConf.offset`,
+  `clockConf_ptr->offset`, `vuConf.offset`) went with it - while `VuBox::left`, `_clockleft`, `_oldleft` and
+  `_realLeft` were deliberately left alone. A MOVE keeps `left`/`top`: those are absolute destination coordinates
+  and a `MoveConfig` has no `align` at all. No conf file can break from this, because an entry is positional and
+  the name survives only in COMMENTS - and `conf_tool.py` reads cells positionally too, so what it sees change is
+  only the JSON key a document carries (the slot files are the device's own). The editor needed two hard-coded keys
+  moved with it: `paintWarnings()`/`vuBoxResolved()`'s `'offset'`, and - the one that would have failed silently -
+  `LIMITED_CELLS`, which is keyed by cell name and drops a limit whose key matches nothing.
+- **A cell a type offers but its widget never reads is greyed, not hidden.** `BitrateWidget::_draw()` reads
+  `offset`, `top` and `dimension` and never `align`; the centring inside the badge is its own square, which is what
+  made it look as though it might respect one. `fullbitrateConf` therefore gained `CONF_CELL_BIT(3)`, the same
+  treatment a fill's dead `fontsize`/`align` cells get.
+- **A Temporary switch re-sends the document.** `/editorwidgets` only flips `widgetsEditorForceOn`/`Off` and
+  rebuilds the weather string, so on its own the following re-apply settles on the STORED layout and every unsaved
+  edit on the page snaps back - which is what "ticking Temporary On reverted my layout" was. `pushWidgetMode()` now
+  clears `layLastSent` and calls `layoutPreview()` once the switch has been accepted, so the same document follows
+  it the way a field edit already did.
 
 ## `data/www/script.js`
 - Main runtime script.
@@ -2955,11 +3901,15 @@ thinks the radio forgot everything. The loader-side wait (`plans/network-recover
   - dynamic page loading (`player`, `settings`, `update`, `ir`)
   - shared page bootstrap helpers for logo/version/i18n application
   - safe lazy fallback for script2-exposed functions (`ensureFunctionLoaded`)
-  - control dispatch from DOM (`data-command`)
+  - control dispatch from DOM (`data-command`): the press resolves against the NEAREST holder, walking up from the
+    innermost `div`/`span`/`li`, so a command wrapper may carry a label div of its own and still fire
   - playlist editor/import/export logic and curated integration
   - online update UI progress handling
   - shared ready-aware redirect helper (`redirectWhenReady`) used by update and reboot flows
   - mode switching (`changeMode`) and its guard state (`setModeSwitching`)
+- **A press that changes something stays lit for a moment.** The `data-command` handler adds `.pressed` to any button
+  carrying `hold` and removes it after `HOLD_MS` (2 s), restarting the timer on a repeated press; `style.css` gives
+  `.pressed` exactly the hover colours, so a touch screen - which never fires `:hover` - sees the press too.
 - **A mode switch blanks the page and locks it, and the page never has to guess when it is over.** `changeMode(el)`
   flips the two mode icons, calls `setModeSwitching(true)` and only then sends `newmode=`, so the icon, the blanked
   list, the loader and the lock all happen in the same tick as the press; `setModeSwitching(true)` puts the `plloader`
@@ -2985,6 +3935,13 @@ thinks the radio forgot everything. The loader-side wait (`plans/network-recover
   - reboot and update redirect calls now explicitly apply a 1-second post-ready grace in JavaScript before navigation.
   - manual upload completion now uses a 60 second fallback, while OTA still uses 180 seconds; both can redirect early as
     soon as `/ready` reports true.
+  - WiFi "Save & Reboot" (`submitWiFi`) uploads `wifi.csv`, which the device imports before calling `ESP.restart()`, so
+    it hands the wait to `rebootSystem(...)`. The old fixed 10-second `setTimeout` guessed when the board would be back
+    and could fire while it was still down; the poll redirects the moment `/ready` answers.
+  - the reboot ceiling is 60 s and lives in `rebootSystem`'s default, so call sites pass no number. It is a ceiling only:
+    the redirect fires the moment `/ready` has been seen down and then up, and 60 s is what stops a 45 s boot from
+    navigating to a page the device is not serving yet. Uploads keep their own budgets - 60 s manual, 180 s OTA - and
+    the mDNS rename keeps 8 s because it is not a reboot.
   - mDNS rename (`restartmdns`) calls `MDNS.end()` + `MDNS.begin()` at runtime via `NetServer::restartMdns()` — no
     reboot. Browser-side: sends `mdnsname=`, swaps the button row for a status message, then polls the new `.local` host
     with `redirectWhenReady` (8s timeout, 500ms post-ready grace). If mdnsValue is empty, saves silently without
@@ -2994,6 +3951,11 @@ thinks the radio forgot everything. The loader-side wait (`plans/network-recover
 
 ## `data/www/options.js`
 - Settings page behavior.
+- **The Danger Zone's unlock rows are found by class, not by id.** `checkDangerZone()` and `initDangerZone()` call
+  `setDangerZoneVisible()`, which walks `.dangerzone` with `classEach()`, so a row that belongs behind the three
+  switches joins the group by carrying the class and no second element has to be taught about it. `dangerzone_txt`
+  and `dangerzone_sw1..3` keep their ids (a label and the switches themselves), as do the `dz_reboot`, `dz_format`
+  and `dz_reset` confirm rows, which are single targets.
 - Responsibilities:
   - timezone JSON loading and dropdown population
   - locale list loading and locale switch logic
@@ -3005,8 +3967,10 @@ thinks the radio forgot everything. The loader-side wait (`plans/network-recover
   - `afterSetupElement` hook restores current `themeId`/`layoutId` from WebSocket data
   - apply handlers for locale/weather/mqtt/wifi
   - reboot/reset/format status screen with per-action behavior:
-    - reboot/reset use ready-aware return-to-root with shorter fallback (15s)
-    - format LittleFS shows reboot status but skips automatic reload
+    - `reboot` uses ready-aware return-to-root (`rebootSystem`, 60 s ceiling, redirect as soon as `/ready` answers)
+    - `format` LittleFS shows reboot status but skips automatic reload
+    - `reset` (settings reset) does not restart the device, so it only shows the status line and reloads after 2 s
+    - `rebootSystem` keeps its `setTimeout` fallback for a page where `redirectWhenReady` is somehow absent
 
 ## `data/www/player.html`
 - Player page structure (playlist, controls, sliders, status elements).
@@ -3035,6 +3999,14 @@ thinks the radio forgot everything. The loader-side wait (`plans/network-recover
   `n0`…`n9`) that maps 1:1 to the `irstore` field / NVS key, so DOM order is irrelevant.
 - The shell loads the page body from `irrecord.html`; the `/ir.html` route itself is handled by the PSRAM cache
   fallthrough.
+- **The remote is not themed; the rows under it are.** `#irremote` uses fixed hex in `style.css`, because hardware
+  looks the same in every theme. `#irrecord` instead borrows the flat button: `checkSelect()` puts `active` on the
+  clicked `.irradio` plus its sibling `.irrecordvalue` and on nothing else - there is no row-level class - so an
+  unselected row is a `.fb` at rest (`--button-fill` / `--button-text` / `--button-outline`) and the selected row is
+  that same button pressed (`--button-active-fill` / `--button-active-text`, ring unchanged - the pair `:hover` and
+  `.pressed` use). Deliberately no hover rule: the row reports a state. `.irclear` never receives `active`, so it is
+  always a button at rest; its cross is two CSS bars in `--button-text`, replacing a base64 PNG that was fixed dark
+  grey on whatever fill the theme had.
 
 ## `data/www/search.html`
 - Search UI for radio-browser integration.
@@ -3058,7 +4030,118 @@ thinks the radio forgot everything. The loader-side wait (`plans/network-recover
   - Applies key-based translations to DOM and fallback behavior.
 
 ## `data/www/style.css`
-- Primary stylesheet.
+- Primary stylesheet, and the WebUI's only palette: the `:root` block at the top declares every colour
+  variable (this was `data/www/theme.css`, folded in), followed by one `:root[data-theme="N"]` block per
+  Display Theme that changes the palette.
+- There is no lock any more: every block is processed by every mode, and a theme is finished by not editing it.
+  The old `PERFECT` title suffix went with the `--update` stage it existed to protect, and `--theme-name` is a
+  declaration rather than part of a comment.
+- On a non-TFT build there is no display palette, so the same setting is labelled "WebUI Theme"
+  (`group_webui_theme`) and the `theme` command saves `themeId` without calling
+  `display.applyTheme()` - on OLED that would only repaint the panel. On a TFT that call is compiled in, so
+  `commandhandler.cpp` has to include `dspcore.h` for `DSP_TFT` to exist there at all.
+- Variables are named by **role**, never by the colour they happen to hold, and the **62 declarations in
+  `:root` are grouped by family**: 9 family heads, 9 standalone colours and 44 members (53 roles: the generator
+  derives 50, and the other three - `--page-bg`, the window around the app column; `--list-bars`, zebra rows;
+  `--playlist-hover`, row hover - are hand-owned, though a block may set them like any other role).
+  A head - `--surfaces`, `--edges`, `--fills`, `--outlines`,
+  `--highlights`, `--actives`, `--labels`, `--infotexts`, `--maintexts` - holds the one colour and its members
+  point straight at it, so one edit moves the family and a theme splits a member by declaring that member.
+  **A head is painted by no rule and never written into a block**: a name that appears only in `:root` is a
+  head, and `theme_tool.find_families()` treats it as such (not in `ROLE_ORDER`, never inflated). The nine standalone
+  colours are `--input-border`, `--list-bars`, `--list-names`, `--logo`, `--logo-shadow`, `--logo-text`,
+  `--page-bg`, `--panel-gradient` and `--playlist-hover`.
+  **The default palette is deliberately neutral** (black/white/grey), so a theme is what adds colour. `:root` is
+  also the fallback whenever no `data-theme` is set, which is what the on-device editor shows while previewing an
+  unsaved theme; block 0 carries its own declarations like every other block. `--accent-text` no longer exists: it
+  was folded into `--heading-text` once it turned out to have no role of its own.
+  `--background` is now `--panel-background`, which says what it paints and matches the rest.
+  Families: `--surfaces` = `--panel-background` / `--scrollbar-track` / `--switch-track`; `--edges` =
+  `--panel-border` / `--scrollbar-thumb`; `--fills` = `--button-fill` / `--control-bg` / `--editor-grid` /
+  `--input-fill` / `--meter-track` / `--select-fill`; `--outlines` = `--button-outline` /
+  `--icons-outline` / `--list-outline` / `--meter-outline` / `--spinner-ring` / `--switch-thumb` /
+  `--warning-outline`; `--highlights` = `--button-active-fill` / `--highlight-fill` / `--list-active-bg` /
+  `--meter-fill` / `--switch-track-on`; `--actives` = `--button-active-text` / `--icon-active-glyph` /
+  `--list-active-text` / `--switch-text`; `--labels` = `--button-text` / `--heading-text` / `--input-text` /
+  `--link-text` / `--select-text` / `--station-name`; `--infotexts` (bright) = `--small-text` (the `#copy`
+  footer) / `--meta-text` / `--info-text` / `--eq-label-text` / `--list-urls`; `--maintexts` (dim) =
+  `--main-text` (the `body` default) / `--caption-text` /
+  `--editor-cell-text` / `--link-quiet` / `--section-title-text` / `--switch-off-text`.
+  `--info-text` is one role on purpose: bitrate, RSSI, volume and battery share the player's info row.
+  **`--control-bg` is the lit part of a checkbox or radio**: the tick of a native `input[type=checkbox]` and the dot
+  of a native `input[type=radio]` (`accent-color`, which a native control shows only while it is on), and the disc of
+  the update page's custom radio (`.checkmark`, whose ring and dot are `--switch-thumb`). The toggle switches are a
+  different widget and never use it: their groove is `--switch-track` / `--switch-track-on` and the knob is
+  `--switch-thumb`. The SD manager's round icon buttons used to be its last client; they are now an `--editor-grid`
+  ring with an `--editor-cell-text` glyph (see the preview bullet below).
+  Outside the families: `--input-border` (text-field outline), `--list-names` (editor name column),
+  `--list-bars` and `--playlist-hover` (fixed list colours),
+  `--panel-gradient` (the wash in a settings card) and the logo trio `--logo`, `--logo-text`,
+  `--logo-shadow`. `--warning-outline` is the editor
+  warning ring. The bitrate box inside a search result carried a fixed `#707070` dotted ring and now takes
+  `--list-outline`; `#equalizerbg`'s `rgba(0, 0, 0, 0.1)` veil and the validator's `rgb(0, 200, 0)` /
+  `rgb(255, 60, 60)` pass and fail stay literal on purpose, being transparency and a signal rather than theme
+  surfaces. **The IR remote is not themed at all**: `#irremote`, `.irbutton` and its blue/red keys use
+  fixed hex values in `style.css` (a real remote looks the same in every theme), so it has no palette roles.
+  The rows under it are the opposite case: `#irrecord` is painted entirely from the button roles - at rest
+  `--button-fill` / `--button-text` / `--button-outline`, and the `active` row `--button-active-fill` /
+  `--button-active-text` with the ring unchanged - so a row reads as an unpressed or a pressed flat button, with
+  no hover. The title badge and the caption keep their own roles.
+- `data-theme` is the theme's id in `themes.h` (`0` = ehRadio Blue & Red, `1` = ёRadio Gold, `2` = Graphite,
+  ...), written onto `<html>` by `/variables.js` before the first paint. A theme with no block - any custom
+  slot, or a built-in never mapped - inherits `:root` whole, so the default palette is the fallback by
+  construction. Adding colours for another theme is one block here and nothing else.
+- The theme paints the app column only: `#content`, `#searchcontent`/`#curatedcontent`, `#editorwrap`
+  and the SD manager's `#pleditor`. `html`, `body` and `#progress` use `--page-bg`, which no generated theme
+  writes, so a light or saturated theme never floods the browser window.
+- **`#playerwrap` paints nothing, on purpose.** It is the 440 px column inside the card, not a second surface;
+  giving it `--panel-background` changed nothing on a dark theme and double-framed the player on a light one.
+- **Every page is one 960 px card with a 580 px column inside it.** `#content` - the shell every fragment is
+  injected into, see `index_html` in `netserver.h` - is 960 wide with `align-items: center`, and
+  `#content > *:not(#pleditorwrap):not(#playerwrap):not(.fb)` caps its direct children at 580 - the first two
+  exclusions keep the 880 px editor and the 440 px player column out, and the third keeps a root-level flat button
+  (the settings Done) on its own `max-width`, which the id in this selector would otherwise override;
+  `#searchcontent`/`#curatedcontent` carry the same pair because they are standalone documents rather than
+  fragments. The player page has always looked like
+  this: `script.js` adds `idx` for it and `#content.idx` was the 960 px rule, now deleted at desktop width while
+  `max-width: 98%` under 1100 px remains, so the player keeps its tablet inset. `#pleditorwrap` is excluded from
+  the cap or the 880 px editor would be clamped to the column. **editor.html is deliberately not in this scheme:**
+  it is a two-column tool, not an app page, and it has no `#content`.
+- **The zebra under a list is a gradient, not a base64 PNG.** `#playlist` and `#pleditorcontent` used to carry
+  fixed images - decoded, two 39 px bands and two 32 px bands of `#272727` / `#2d2d2d` - which could not follow
+  the theme and showed as the wrong colour under a short list and behind the SD manager's
+  `background: transparent` notice rows. Each is now a `repeating-linear-gradient` in `--list-bars` /
+  `--panel-background` with the same periods (the row height of that list at the default font size) and
+  `background-attachment: local`, so the bands still scroll with the rows. The rows' own zebra remains the
+  `nth-child` rule.
+- **The editor's preview is a grid cell; only the SD manager's arrows are round.** `.pleitem span.pleplay` takes the
+  cell's shape from `.pleitem span` - square, full row height, the 1 px `--editor-grid` border - and differs only in
+  being 32 px wide with the glyph centred; that is what keeps the row's horizontal rule unbroken across the column.
+  It was a 28 px circle inset by a 2 px margin behind a transparent border, so the rule visibly stopped there, and a
+  round ring can never draw a cell's straight edge on any theme. The fill on hover and on the playing row carries
+  `!important` because the odd-row zebra paints every span in the row underneath it.
+  `body.sdman #pleditorcontent .sdiconbtn` is the round one - 22 px, ring `--editor-grid`, glyph
+  `--editor-cell-text`, no fill, `--icons-outline` and `--list-active-bg` on hover - and its cells are borderless, so
+  a circle breaks no rule; its strokes are `currentColor`, one colour driving an SVG.
+- **`.fb.done` centres with auto margins**, not the old `margin-left: calc(50%)` plus `translateX(-50%)`: that pair
+  was tuned to a 540 px parent and slid off centre as soon as the card widened to 960. `margin: 20px auto 10px auto`
+  with `max-width: 140px` is centred at any width.
+- **`body.sdman #pleditorwrap` carries no vertical padding.** The wrapper is pinned `top: 0; bottom: 0`, so the base
+  rule's 5 px and 10 px painted two bands of `--page-bg` above and below the panel; `padding: 0 5px` keeps the side
+  gaps and lets the panel meet both window edges.
+- A live theme change is applied by the dropdown handler in `options.js` and by the `themeId` key of the
+  GETSCREEN reply in `script.js`; both only set `data-theme`, the colours stay CSS's.
+- `.fb` is the flat button: `--button-fill` / `--button-text` at rest, `--button-active-fill` /
+  `--button-active-text` on hover (mouse only) and while it carries `.pressed`, which `script.js` adds for two
+  seconds after a press so a touch screen gets the same feedback. There is no permanently highlighted variant -
+  the old `.fb.hl` is gone, and the buttons that used it (Apply Changes, Save, Calibrate, the update page's
+  Cancel) are ordinary `.fb` buttons now.
+- To judge a change against every screen at once, or to build a theme block, open `src/displays/webui_tool.html` -
+  see its own section above.
+- The blocks in `data/www/themes.css` are generated by `theme_tool.py -i` when a display theme is imported, and
+  then by hand in `webui_tool.html`; `theme_tool.py --inflate`/`--deflate` (or `--deflate-lossy`) keep one lean.
+  There is no `mode=` marker and no `--update`: themes.h is written once per theme and the WebUI palette is
+  tuned after that.
 - `#info` is a one-line flex row by construction: `nowrap`, no per-item minimum widths, and `#bitinfo` the only item
   that
   flexes (centred, ellipsising). The old `min-width: 110px` per item plus `flex-wrap: wrap` is what used to push an item
@@ -3068,9 +4151,6 @@ thinks the radio forgot everything. The loader-side wait (`plans/network-recover
 - The playlist editor input carries the **same ladder as `#playlist li span.text`** (20px base, 16px at ≤375, 25px at
   600-899, 30px at 900-1200), so a name reads the same in the list and in the editor. It is not tied to the SD manager's
   `.sdname` any more; the editor's own spans and the playlist's count column already agreed at 14/12/18/21.
-
-## `data/www/theme.css`
-- Theme override variables/colors.
 
 ## `data/www/locales.json`
 - Locale-code to display-name mapping for selector.
@@ -3122,6 +4202,20 @@ thinks the radio forgot everything. The loader-side wait (`plans/network-recover
     sender does the same). The strings live in the generated `src/locale/dsplocale.h`, so a new message needs its key
     added to all 36 `src/locale/display/*.json` files and that header regenerated; measured cost of one new key across
     the 36 locales is **~5 KB of flash**, which is the number to weigh before adding one.
+    **`BOOTVSPATCH` / `BOOTVERSION` are the pair that is deliberately NOT in the locale tables**: the cue sets the
+    line to the literal `"VS1053"` (a chip name needs no translation, and the cue is only ever sent from a VS1053
+    build, so a locale key would still have cost its ~5 KB in every other build), and `BOOTVERSION` puts
+    `RADIOVERSION` up. `_bootScreen()` now starts the line EMPTY, so the version appears exactly once — `setup()`
+    queues `BOOTVERSION` immediately after `player.init()` returns, which is past the reset, the chip query, the
+    patch, the audio-task start and the first balance/tone/volume writes. `Player::init()` queues the cue under
+    `if (VS_PATCH_ENABLE)` inside its VS1053 branch, just before `ResetChip()`/`begin()`. **The restore has to stay
+    on the far side of `player.init()`, never beside `loadUserCode()`**: "patch applied" is logged inside `begin()`,
+    before the writes that can strand a wedged chip, and the `done` line at the end of `player.init()` is what a
+    panel showing `VS1053` is the counterpart of. The cue's paint window is `ResetChip()`'s own `delay(30)` +
+    `delay(100)` and `begin()`'s `delay(170)` — no delay was added for it. **Why it earns a request at all**:
+    `loadUserCode()` issues one `write_register` per plugin word and each waits on DREQ with a 50 ms ceiling, so a
+    chip that refuses the patch (corrupt patch RAM after a fast power cycle, or a patch applied twice) costs
+    `PLUGIN_SIZE` × 50 ms — 8414 words, about seven minutes — which is exactly what a "hung" boot looks like.
   - `TextWidget::setText()` is **virtual** (all three overloads), with `ScrollWidget` and `NumWidget` marking their
     matching overloads `override` so the compiler enforces the match. This matters because a subclass can legitimately
     be held in a `TextWidget*`: the boot line is exactly that case (`Display::_bootstring` is a `TextWidget*` over a
@@ -3130,19 +4224,43 @@ thinks the radio forgot everything. The loader-side wait (`plans/network-recover
     wider than the window, was painted at an underflowed centre offset, which reads as "nothing drawn". `_draw()` was
     already virtual, so this removes a static/dynamic mismatch rather than adding a mechanism.
   - `TextWidget::_realLeft()` **clamps** rather than underflowing: when `_textwidth` is not smaller than the available
-    width it returns `0` (the widget's own left edge) instead of wrapping the subtraction to ~65500 and painting
-    off-panel. Only reachable for text wider than its space — a `ScrollWidget` scrolls instead and a plain `TextWidget`
-    is conf-sized — so the clamp is insurance against the invisible-rather-than-misplaced failure mode.
+    width it returns the SPAN's left edge — `offset` where the widget has a span, the panel edge where it has not —
+    instead of wrapping the subtraction to ~65500 and painting off-panel. Only reachable for text wider than its
+    space — a `ScrollWidget` scrolls instead and a plain `TextWidget` is conf-sized — so the clamp is insurance
+    against the invisible-rather-than-misplaced failure mode, and it keeps a too-wide line spilling to the RIGHT, into
+    the direction its own window clips and erases, rather than out of its span to the left.
   - The boot text line (`Display::_bootstring`, built in `Display::_bootScreen()`) is a `ScrollWidget` fed from the
     conf's plain `bootstrConf` `WidgetConfig`, so a string that fits is drawn statically at the conf's align (WA_CENTER
-    still rules) and a longer one parks at the edge and scrolls. Its window and buffer are derived in code (`width =
-    MAX_WIDTH`, `buffsize = BOOTSTR_LEN` 128, uppercase), and its **scroll cadence is borrowed from the panel's own
+    still rules) and a longer one parks at the span's edge and scrolls. Its window and buffer are derived in code
+    (`offset = TFT_BORDER`, `width = MAX_WIDTH`, `buffsize = BOOTSTR_LEN` 128), and its **scroll cadence is
+    borrowed from the panel's own
     `apSettConf`** — `startscrolldelay`, `scrolldelta` and `scrolltime` only, never that entry's
     `left/top/width/buffsize/fontsize`, which belong to its own line and differ on the round TFT (`left =
-    TFT_FRAMEWDT+32`, `width = MAX_WIDTH-64`) and the 220x176 (`width = DSP_WIDTH+10`). That inherits each panel's tuned
+    TFT_BORDER+32`, `width = MAX_WIDTH-64`) and the 220x176 (`width = DSP_WIDTH+10`). That inherits each panel's tuned
     step: 1px on the OLEDs and small TFTs, 2px on the 220x176 and every panel 240px and up, 4px on the 428x142,
     `apSettConf.widget.textsize > 0` is the guard if the entry is `{ }`, which zero-initialises it and would leave the
-    boot line standing still — the fallback is `SCROLLTIME`.
+    boot line standing still — the fallback is `SCROLLTIME`. **`offset` is the one field the conf cannot supply**:
+    it is the span's LEFT EDGE, not a margin (`WidgetConfig::offset`), and it is dead in the plain centred widget the
+    conf declares — which is why every conf leaves it `0`. It goes live as soon as the line becomes a scroll, so with
+    `width = MAX_WIDTH` it must be the border inset; left at `0` the line centred inside `[0, MAX_WIDTH)` and sat one
+    `TFT_BORDER` left of the glass (10 px on a 480x320, 8 px on the 320x240/240x240 — a character or two at the boot
+    sizes). The OTA/validator label in `Display::_buildPages()` had the same shape (`offset = 0` while keeping
+    `apSettConf`'s inset width) and now centres that span on the glass instead.
+  - **One line scrolls at a time, and a DESTROYED line used to leave that slot dangling.** `dsp.setScrollId()` is a
+    single pointer for the whole panel: `ScrollWidget::_calcX()` takes it while a line is mid-scroll and releases it
+    on wrap, `setText()` releases it when the line owns it, and `_draw()` returns early while it names someone else.
+    `_showDialog()` and `_switchMode()` clear it too, because they swap the page. What was missing is destruction:
+    nothing cleared the slot when a `ScrollWidget` was deleted, and `Page::~Page()` deletes the widgets it holds — so
+    a page torn down while its line held the slot left the pointer aimed at freed memory, and then EVERY scroll line
+    on the panel sat still for the rest of the boot. The boot screens do exactly that: `_start()` removes the logo
+    page and `_apScreen()`/`_sdmanScreen()` each remove the page they replace. That is the reported "the AP screen's
+    two lines do not scroll until a reboot": the boot logo's own line is a `ScrollWidget` as well, its window is
+    `MAX_WIDTH`, and on a narrow panel the version string (or a scan-progress string) is wider than that, so it took
+    the slot — while on a wide TFT the same string fits, `_doscroll` stays false, and the slot is never taken. The
+    deciding test is string-versus-window, NOT the panel family: any panel whose boot line or `apTitleConf` overflows
+    its window can do it. Fixed in `~ScrollWidget()`, which releases the slot when it owns it, plus an explicit
+    `dsp.setScrollId(NULL)` at each of the three page swaps so the idiom stays visible where `_showDialog()` and
+    `_switchMode()` already spell it. See `plans/boot-scroll-id-dangle.md`.
   - `ProgressWidget` is the boot screen's animated dots line, with exactly one instantiation (`Display::_bootScreen()`),
     so its behaviour is the boot screen's. The line is `speaker + runway + boot glyph`, hard against both glyphs, and
     `ProgressConfig` is `{ frame interval ms, line character width, blob elements }` — every conf carries that header
@@ -3156,7 +4274,15 @@ thinks the radio forgot everything. The loader-side wait (`plans/network-recover
     blob left, the cell it entered), against a whole-line erase plus fourteen glyph writes in the single-path version.
     `_fieldX` records the field's x origin at the last full paint, and `_painted` guards the first tick so a delta can
     never be painted against a picture the widget did not put on the panel; both paths place column `c` at `_realLeft()
-    + (frameChars + c) * _charWidth`, which is why a full paint cannot shift the dots. The reason is the panel rather
+    + (frameChars + c) * _charWidth`, which is why a full paint cannot shift the dots. **The blob can be a second
+    colour**: `_dotColor` starts as the widget's own `fgcolor`, and `setDotColor()` may replace it - the boot screen
+    passes `BOOT_DOT_COLOR` (`dspcolors.h`, guarded and defaulting to `BOOT_PRG_COLOR`, so the line stays one colour
+    unless a build asks otherwise). `_dotCell()` inks the blob with it, and `_draw()`, which printed the whole line in
+    `_fgcolor` through `TextWidget::_draw()`, re-inks just the blob's cells afterwards - only when the two colours
+    differ, at most `barwidth` cells, landing on the same pixels for the reason the sentence above gives. The two frame
+    glyphs never take part, and erasing a cell is a `fillRect()` in `_bgcolor`, so it is colour-free. On a 1-bit panel
+    both values collapse to the same lit pixel; on SSD1322/SSD1327 the second one has to be a driver-palette value.
+    The reason is the panel rather
     than the animation: an SH1106 is a framebuffer whose refresh hides an erase, while an ILI9488 shows every write, so
     the same code flickers on one and not the other. The blob grows in at the speaker, slides right one column per frame
     and has its head eaten at the far end, which is what makes the dots read as vanishing into the boot glyph; the cycle
@@ -3210,6 +4336,10 @@ thinks the radio forgot everything. The loader-side wait (`plans/network-recover
   `MoveConfig` field that `display.cpp` references — nothing is optional at link time. Disabling a feature is done by
   zeroing the relevant struct (e.g. `height=0`, `buffsize=0`, `dimension=0`); `display.cpp` checks those sentinel values
   at runtime and skips the widget. This eliminates the old `HIDE_*` compile-time macro system entirely.
+- `conf_index.h` beside them describes those same fields for other code — each field's type, its cells, its `offsetof`
+  in `LayoutData`, the group it belongs to, and the conf file's own constants. It is included at the tail of
+  `dspcore.h`, after the conf file, and it is the contract a layout JSON file will be read against. See its entry
+  above and `plans/layout-editor.md`.
 
 ## Display tools
 - `src/displays/tools/pretext.h` / `pretext.cpp` — `preText()` font-aware text resolver (keep / fold / replace),
@@ -3225,7 +4355,8 @@ thinks the radio forgot everything. The loader-side wait (`plans/network-recover
 - The old `utf8To.*`, `utf8_common.*`, `utf8Latin.*` and `utf8Cyrillic.*` files are **gone** (they were replaced by the
   Unicode GFXfont pipeline); `localization-guide.md` still described them as "retained for reference".
 - `src/displays/tools/oledcolorfix.h` — OLED monochrome color initialization. `DSP_INVERT_TITLE` ifdef removed;
-  `metafill` corrected to `TFT_FG` (was `TFT_BG` — invisible on black screen).
+  the palette no longer carries `metafill`/`plcurrentfill` (the meta band takes `metabg`, the rule under an inverted
+  meta takes `line`, and the playlist highlight takes `plcurrentbg`).
 
 Purpose:
 - text normalization/transliteration and glyph handling
@@ -3247,9 +4378,19 @@ design record; this is the shape of it.
   **Every system font must stay on the 6x8 metric class** (`xAdvance == 6`, `yAdvance == 8`) — layout
   comes from `CHARWIDTH`/`CHARHEIGHT`, not from the font — and that is validated at boot.
 - **Clock fonts** — one folder per STYLE, `src/displays/clockfonts/<Style>/`, holding
-  `{8,15,21,28,35,52,70}.png`.  `py makefont.py <Style>` converts the whole folder into one
-  `clockfonts/<Style>.h` and **aborts, naming every missing size, if the set is not complete**.  The
-  generated header defines the seven `GFXfont`s, the two glow strings and a `ClockFontStyle`; the
+  `{10,15,21,28,35,52,70}.png` plus optional `<size>glow.png` / `<size>glow_char.png`.  `py makefont.py
+  <Style>` converts the whole folder into one `clockfonts/<Style>.h` and **aborts, naming every missing
+  size, if the set is not complete**.  Every glyph is packed at its FULL CELL (digit/colon cell width x
+  image height), so all eleven share one ink grid — there is no trim-to-ink mode.  The glow glyph is the
+  union of the lit pixels across the digits, injected at `/` (hard-coded, no switch).  Per size an
+  ordinary run resolves it from the files alone, in this order: `<size>glow_char.png`, one digit cell
+  used as drawn; `<size>glow.png`, an alternative drawing of the same ten digits whose union is used;
+  finally the union computed from `<size>.png`.  The glyph therefore masks the strip — an existing
+  `<size>glow_char.png` makes its size's glow strip inert until regenerated or deleted.  `--glow-out
+  [SIZE]` writes that union — from `<size>glow.png` when present, otherwise from `<size>.png`, never
+  reading the file it is writing — as `<Style>/<size>glow_char.png` (white on black, exactly the digit
+  cell), all seven sizes or just SIZE, **prompting before overwriting** and **without writing the .h**.  The
+  generated header defines the seven `GFXfont`s, that glow character and a `ClockFontStyle`; the
   three styles are declared in `dspfont.h` as `_clockFontStyles[]` and defined in
   `clockfonts/clockfonts.cpp`, which is the only TU that includes them.  `clockFontStyle()` is the
   accessor, driven by `config.store.clockFontId`.
@@ -3259,13 +4400,182 @@ design record; this is the shape of it.
   produced for its panel.  `numConf.textsize` is the same index for the number page, and the two are
   independent — the widgets resolve their own `ClockFontSel`, which is why there is no global clock
   font pointer any more.
+- **The one exception is the screensaver's Smaller Clock option** (`config.store.screensaverClockSmaller`,
+  `SS_SMALLER_CLOCK`): while `config.isScreensaver` is true, `ClockWidget::init()` resolves the conf's
+  index **one rung lower** through `_clockConfSize()` in `widgets.cpp`, and `0` is the floor — a layout that
+  already asks for the built-in font keeps it.  It is applied at the ONE place a size is resolved because
+  `_cf` is what every measurement of the clock derives from (`_superfont`, `_timeheight`, `_timewidth`,
+  `_space`, `_rowgap`, `_clockheight`, `_clockwidth`, the PSRAM framebuffer window); a draw-time `if` would
+  print a smaller font into a box measured for the larger one.  `ClockWidget::refreshSize(conf)` rebuilds
+  only when the resolved index differs, and takes the conf as an **argument**, never `_config`: `moveTo()`
+  writes `_config.offset/top`, so re-initing from `_config` would take the moved position as the widget's
+  own.  `Display` calls it in exactly two places — `_enterScreensaver()` before `_screensaverWidgets()`
+  (`config.isScreensaver` is already true on every route in, including `SSREBUILD` from the WebUI), and
+  `_switchMode()`'s PLAYER branch **after** `config.isScreensaver = false` (`_begin()` picks the
+  framebuffer window's background from that flag) and **before** `setPage(PG_PLAYER)`, which is what paints
+  the clock at its own size again.  Leaving the screensaver for VOL or SDMAN deliberately does NOT refresh:
+  the page on the panel is still the screensaver's, and `_begin()` would build a theme-background window
+  over a black one.  Two visible consequences of the rungs being indices rather than heights: `1 -> 0`
+  drops a 15 px clock font to the built-in 6x8 cell, and `2 -> 1` crosses `_compactClock()`, so the divider
+  column and the screensaver's date column go with it.  The WebUI row (`scrsmall`) is gated by
+  `group_smaller` / `hide_group_smaller` on `activeLayout.clockConf.textsize != 0` — at index 0 the option
+  does nothing.
 - **The seconds** are drawn with that style's `8/15/21/28` sibling at the same ink top the built-in
   cell used, falling back to the built-in font when the style has no sibling at that index.  Their
   glow uses `theme.secondsbg` / `theme.secondsbgss`.
 - **`fullClock` and `seconds` are per-layout booleans** (`LayoutData`, first two of the TRANSFORMS
   group), replacing "the size is 52 or 70, or the model is an ILI9225" and "this size has a seconds
   font".  The ILI9225 model hack is gone.
-- **`clockglow` is a stored setting** (`config.store.clockglow`), not the `CLOCKFONT`-derived macro.
+- **At the two smallest sizes `fullClock` degrades to the date alone** (`_compactClock()`, i.e.
+  `_superfont <= 1`).  Size 0 (no clock font) and 1 (15 px) have no divider column to put a divider in - its
+  gap is a pixel or two - nor an 8 px day-of-week row that reads beside the time, so `_printClock()` drops
+  both and keeps the date, on a row of its own below.  **The seconds are not implied either:** they live beside
+  the divider in the sizes that have one, so at 0 and 1 they are drawn only when the layout sets `seconds` -
+  the draw gate is `drawSeconds = _showSeconds || (_fullclock && !_compactClock())`, whose 2..4 half is the old
+  `_fullclock || _showSeconds`.  That is what makes the ink agree with the box: `_rowwidth` counts the seconds
+  only under `_showSeconds`, so drawing them regardless left a centred time off-centre with the seconds hanging
+  outside the box it was centred in.  It also removes a latent collision: with `fullClock` AND `seconds` on at
+  size 1 the DOW and the seconds share the column and their bands overlap.  Sizes 2..4 are untouched, and the
+  screensaver's clock follows the same rule (same widget, same print).  Note this is the SCREENSAVER's full date,
+  not `fullClock` itself - the widget keeps the date on the main screen at 0 and 1, on its own row.
+  **The WebUI's two clock rows are gated on the SIZE INDEX the widget actually has**, in `GETACTIVE`
+  (`netserver.cpp`): the glow row needs a theme whose `clockbg` (or `digitbg`, for the number) differs from the
+  background *and* a widget with a clock font at all (`clockConf.textsize` / `numConf.textsize`), while the
+  SCREENSAVER'S FULL DATE row (`group_full_time`) is offered
+  when `(fullClock || seconds)` and the clock has a font.  The `seconds` half matters: at size 1 the switch still
+  governs the seconds on the screensaver (only the date is not drawn at 0 or 1), so withholding the row there
+  would hide a switch that does something.  Size 0 is the one with nothing to offer - no clock font, so no glow
+  character and no screensaver full date either.  The boundary itself is a plain literal in
+  `ClockWidget::_compactClock()` (`_superfont <= 1`), deliberately not a shared macro.
+  **And the screensaver's two parts are gated apart:** the
+  seconds follow `showSecondsOnScreensaver` alone - the user's own setting - while the divider, the day and the
+  date need BOTH the framebuffer and a size above the compact ones.  They used to share one flag, so the seconds'
+  gate ANDed in the full clock's permission whenever `fullClock` was set, and that permission asks for the
+  framebuffer: on an OLED a layout with `fullClock` showed no seconds on the screensaver at all while the same
+  layout without it showed them, and on a TFT the two clauses happened to collapse to the setting, which hid the
+  coupling.  The compact sizes also never draw the date on the screensaver now (the flag carries
+  `!_compactClock()`), which cannot reach the main screen because `!config.isScreensaver` short-circuits first.
+- **`_rowgap` is one row's gap for the size** - `_space`, or a whole built-in character row at index 0, where
+  `_space` is 0.  It serves both the seconds' gap and the date's row, and it replaced `_space` in the three
+  places those rows are measured: identical for 1..4, and it is what fixed index 0, where the date landed ON
+  the time's row and the seconds were raised a row above it.  The compact box is `max(time row, date)` so a
+  right-aligned date cannot be pushed out of the framebuffer window, and at those sizes the two rows are aligned
+  INDEPENDENTLY: `_rowLeft(rowW)` places each of them inside the box, so a centred clock centres its time line
+  and its date line separately instead of centring the block as a whole.  `_rowLeft()` returns the box's own
+  left edge above these sizes, so nothing there changes, and `_rowwidth` is the time's own row - the time plus
+  the seconds when they follow it - measured in `_getTimeBounds()` beside the date's width.  The blinking colon
+  and the glow follow `_rowLeft()` as well, and they are the two that missed the inset longest: neither is part
+  of the time string, and the glow was drawn at the BOX's edge, which only stops being the digits' start once the
+  compact sizes make the box the wider of the two rows - so its cells sat away from the digits they fill, which
+  is what the TFT showed and a one-bit OLED never could (its `clockbg` equals `background`, so it has no glow).
+  `_dateString()` is the
+  one place the date string is built, called from `_getTimeBounds()` as well as the print, because the box is
+  sized for the wider row.
+  **The y convention is the thing to remember:** a clock font's `setCursor` y is its BASELINE with the ink
+  above it, the built-in cell's is the glyph TOP with the ink below - which is why the seconds' ink top is
+  `_top()` when there is no clock font, and why the built-in seconds must be sized `_cf.textPx` and not
+  `_superfont` (which is 0 there).  At every clock-font size the seconds' ink top is `_top()-_timeheight` in BOTH
+  fullClock states: a legacy `+ _space` on the no-fullClock path used to drop them below the digits' first row
+  (2 px at size 1, 5/7/10 at 2..4), so the same clock looked a row different depending on whether the layout also
+  asked for the date.  The framebuffer WINDOW follows the same split, and both halves have to be
+  read together: a clock font's ink is above its baseline, so the whole `_timeheight` must be inside the window
+  and `_begin()` places it at `_config.top - _timeheight`; the system font's ink is below its cursor, so at size
+  index 0 the window starts at `_config.top` itself, `_top()` is 0 inside it, and `_clockheight` is
+  `CHARHEIGHT * textPx` plus the date's row when `fullClock` is on - 8, or 16, where the clock-font formula gave
+  8 and 24.  Sized for a clock font instead, only the digits' FIRST row fell inside the window with `fullClock`
+  off - "a few pixels, all in the same row" - and the eight rows above the clock were dead space that `clear()`
+  and `freeBuffer()` were wiping.  Two side effects worth knowing: `clockHeight()` at index 0 is that 8 or 16
+  (its one reader is the screensaver's clock-move maths, which wants exactly the box's height), and the drawn
+  pixels did not move at all.
+  **And a framebuffer glyph never paints its background:** `psFrameBuffer::write()` overrides the library's and
+  renders through `_writeGlyph()`, which draws only the LIT pixels, so on a TFT nothing erases itself and every
+  text redraw relies on a `clear()` first.  The seconds are the one thing redrawn in place every second, which is
+  why their built-in branch needed the same `fillRect(sx, sy, _secwidth, CHARHEIGHT * fs, bgColor)` the
+  `secondsFont` branch already had - without it "35" left behind every pixel "36" did not cover and 0..9 smeared
+  into one another while the minutes, repainted after a clear, stayed crisp.  See
+  `plans/clock-small-size-date-only.md`.
+  **The NUMBER widget reads the same index** (`numConf.textsize`) and had refused 0 outright: `NumWidget::_draw()`
+  returned early on `_cf.index == 0`, so a layout asking for the system font drew NOTHING there while `setText()`
+  went on erasing the cells it would have used - and the three panels whose confs ask for 0 (the 128x32 OLED, the
+  284x76 and the 160x80) never showed the number at all.  That refusal is gone, and nothing else was needed: the
+  erase, the bounds (`_charWidth()` out of `textPx`, so 6 px per character) and the size (`_cf.textPx`) already
+  resolved the system font, with the ink BELOW `_config.top` - the mirror of the clock's index 0, where the ink is
+  above its cursor.  `NumWidget` draws to the panel directly rather than through a framebuffer, so it needs none
+  of the clock's window care.  See `plans/font-index-0-number.md`.
+- **`clockglow` is a stored setting** (`config.store.clockglow`), not the `CLOCKFONT`-derived macro.  It is
+  gated at draw time by the glow colour differing from the backdrop (`clockBgColor != bgColor`, and the
+  seconds pair likewise), not by a panel macro: a one-bit palette makes `clockbg == background`, so the glow
+  is exactly the no-op the old `!DSP_OLED` guard gave, while a colour theme that sets them equal is skipped
+  too.  On greyscale SSD1322 (`clockbg = GRAY_1` against a black background) the glow is now both offered and
+  drawn, where the `DSP_OLED` guard hid it, and that panel's colon takes the TFT branch's rule as well: its OFF
+  phase is drawn in `clockbg`, so the blink cannot punch a background-coloured colon out of the glow block (on a
+  one-bit palette the same expression answers the background, because `_glowOn()` holds the theme test).  All
+  three things the CLOCK's glow touches - the time's glow, the
+  seconds' glow, and the colon's OFF colour, which is deliberately drawn in the glow colour so the block stays
+  unbroken while the colon blinks - ask one predicate, `ClockWidget::_glowOn()`, which needs a clock FONT as well as the
+  stored setting: `init()` can only put the digit `'0'` in `_glow`/`_glowSec` at size index 0 (they are the width
+  templates `_timewidth`/`_secwidth` are read off, so they must not be blanked instead), and printing them would
+  paint a literal `00:00` behind the time.  Size 0 therefore has NO glow anywhere, and the WebUI's Clock Glow row
+  is offered on the same rule plus that font test, via the `group_clockglow` / `hide_group_clockglow` token in
+  `GETACTIVE` (`netserver.cpp`).  Since 2026.10.28 there are **two rows and two tokens**: `group_clockglow` is
+  `clockbg != background && clockConf.textsize != 0`, and `group_digitsglow` is `digitbg != background &&
+  numConf.textsize != 0`.  Each is an AND, because each is a "hide when", never a second reason to show, and
+  neither row is affected by the other setting.  The `theme` command re-sends the
+  tokens so the rows follow a theme switch with the settings page open, and a `layout` switch re-sends them for the
+  same reason (each widget's size index lives in the layout, not in the theme).
+  **The NUMBER widget glows too** (`NumWidget`, `numConf`), on its **own stored setting** `config.store.digitsglow`
+  since 2026.10.28 - `NumWidget::_glowOn()` is the number's copy, needing a clock font, that setting and
+  `digitbg != background`.  The digits keep `theme.digit` and the glow behind them is `.digitbg`, its own field
+  since 2026.10.27 (15% of `.digit`; `plans/digitbg-glow.md`), so the clock and the number can glow in different
+  colours - which is what the eight themes that draw the number in blue needed, having glowed it in the clock's
+  grey.  A number cannot reserve cells out of nothing, so the
+  widget is told the WIDEST value its screen can show (`setFieldMax()`): `VOLUME_SCALE` for the volume,
+  `config.store.countStation` for a station/track number and for the SDCHANGE scan counter.  Only the digit COUNT
+  of that figure is kept (`digits(max)`, at least one, never a hardcoded two, because any total can itself be a
+  single digit), and with the glow on the value is **zero-filled to it** - `5` at `VOLUME_SCALE` 42 prints `05` -
+  so the string itself is the field.  One width therefore serves placement, erase and the glow cells
+  (`_textwidth`), and a centred layout stays centred at every value instead of printing a lone digit in the
+  right-hand half of a two-cell box.  There is no reserved box and no second width: the glow glyph carries the
+  digit's own advance, so N glow cells are exactly N digit cells, and both strings print at the same x.  Both are
+  printed with the ONE-argument `setTextColor()`, which is
+  transparent: `dsp` on a TFT is the driver, not the framebuffer, so an opaque print would paint each glyph's
+  background over the glow.  The scan screen's total is `countStation`, which `initSDPlaylist()` now keeps from the
+  `countAudioFiles()` walk that decides whether to re-index (exact whenever that walk ran) and which is otherwise
+  the previous index's count; a fresh card has no total, so its zero-fill follows the count.
+  `countStation` is the one cache of "how many entries can the device browse", so every mode change refreshes
+  it: **`initPlaylistMode()` ends with `setCountStation(cs)`**, where `cs` is already the active mode's length
+  (read at the top, re-read after the SD re-index and after `initPlaylist()`), and
+  **`Utility::initPlaylist()`** refreshes it whenever the web index is rebuilt - boot, a station added, a
+  playlist saved, an import.  Both are needed: the first covers a mode change in either direction, the second
+  covers an index rebuild that never enters `initPlaylistMode()`.  Without them the station entry padded to
+  one digit (no figure at all), and an SD card's total survived into web mode (three digits on a short web
+  playlist).  The display task never opens the index, so the store has to carry it.
+  **The footer is one table per screen** (`Display::_footerMask()`).  `_footer` is a sub-page attached to
+  `PG_PLAYER` and `PG_DIALOG` only, so it is painted on every dialog; `PLAYER` and `VOL` are the modes that keep it
+  (`FW_ALL`), and every other mode - the two number screens, `UPDATING` / `VALIDATING`, `LOST`, `SLEEPING`,
+  `INFO`, `SETTINGS`, `TIMEZONE`, `WIFI` - keeps none of `_volbar`, `_voltxt`, `_volip`, `_battery`, `_rssi`,
+  `_bufferbar`.  `_applyFooter()` runs in `_switchMode()` BEFORE the page switch, hides with the lock-plus-deactivate
+  pair (a `TextWidget` still paints from `setText()` on a lock alone) and shows with `unlock()` alone, because the
+  page pass that follows activates and draws the widget.  Every request that writes a footer widget asks
+  `_footerShown(bit)` first, and `_showDialog()` empties `_nums`, which otherwise kept the last number behind a
+  title.
+  **The IP line's icon follows the mode, and one helper owns the swap.**  `_volip` is written from the conf's
+  `iptxtFmt` by `Display::_footerIp()` and by the SDOFFLINE writes in `_applyState()`, `_showNumbers()`, the
+  `_switchMode(PLAYER)` return path, `NEWIP` and the layout switch - and the confs disagree on that string.  The
+  ones with a mark carry the two-cell **web-mode pair** `"\021\022"` at its head (`WEBMODE_A` / `WEBMODE_B`, slots 17
+  and 18, drawn to match the WebUI's own mode mark); the single-cell `\037` IP glyph that used to sit there is gone,
+  its `ICON_TABLE` slot is `NULL` and its bitmap is left commented out in `icons.h`.  `displayTFT160x128conf.h` and
+  `displayOLED128x32conf.h` carry `"%s"` with no mark at all, and `displayTFT160x80conf.h` carries `""` because that
+  layout has no IP line.  `ipLineFmt(sd)` in `display.cpp` returns the conf's string untouched, or `"\030\031%s"`
+  when that string begins with `"\021\022"` and `sd` is true - the card pair is a SUBSTITUTE for the conf's mark,
+  never an addition, so a conf without one keeps its own spelling and the empty one keeps the line blank, the
+  offline path included.  The swap is pair for pair: both are two glyph cells and neither carries a space, so it
+  cannot change the line's width, its centring or the rectangle the next paint erases.  `sd` is true for every
+  SDOFFLINE write and for `config.getMode() == PM_SDCARD` in `_footerIp()`, so a card in the footer means "playing
+  from the card".  Because the line is now mode-dependent, `Config::changeMode()` queues `NEWIP` beside its
+  NEWMODE/NEWSTATION/NEWTITLE requests: WEB -> SD passes through the SDCHANGE screen, but SD -> WEB leaves the
+  player screen already up, so `_switchMode()` returns at its same-mode guard and nothing else would rewrite the
+  icon.
 - **`YO_MONO` and `DS_DIGI/` are deleted.**  `LED` took YO_MONO's id slot (`0`); the ids are the index
   into `_clockFontStyles[]`, so they must never be renumbered.
 - `/fonts.json` and `/clockfonts.json` are built from those two tables by `Display::_buildJsonCache()`,
@@ -3316,8 +4626,6 @@ behaviors:
 - **Unrenderable codepoints are memoised** in a 128-slot direct-mapped cache keyed on the codepoint *and the font
   pointer*, so a font change invalidates it for free. `preTextInvalidateCache()` is for a font whose data changes in
   place.
-- **Forced fold:** `PRETEXT_FOLDACCENT` / `PRETEXT_FOLDCYRILLIC` no longer enable the fallback (it is unconditional);
-  they now force the fold even where the glyph exists. `PRETEXT_ALLCAPS` is unchanged in intent.
 - **Cursor advance** in the two glyph branches is now defensive only (font swapped mid-frame); the old post-`preText`
   fallback and its `_writeGlyph()` recursion are gone, so `preText()` is the single place that decides what is drawn.
 - **`psframebuffer.h`** mirrors the same `_writeGlyph` logic for PSRAM-framebuffer TFT displays — any change to one must
@@ -3360,10 +4668,32 @@ must test — never a coordinate, since `{0,0}` is a legitimate position:
 
 | Config type | Fields | Guard field |
 |---|---|---|
-| `WidgetConfig` | `left`, `top`, `textsize`, `align` | `textsize > 0` |
-| `ScrollConfig` | `widget`, `buffsize`, `uppercase`, `width`, ... | `buffsize > 0` |
-| `FillConfig` | `widget`, `width`, `height`, `outlined` | `height > 0` |
-| `BitrateConfig` | `widget`, `dimension` | `dimension > 0` |
+| `WidgetConfig` | `left`, `top`, `textsize`, `align` | any cell non-zero |
+| `ScrollConfig` | `widget`, `width`, `startscrolldelay`, `scrolldelta`, `scrolltime` | any cell non-zero |
+| `FillConfig` | `widget`, `width`, `height`, `outlined` | any cell non-zero |
+| `BitrateConfig` | `widget`, `dimension` | any cell non-zero |
+| `VUBandsConfig` | `width`, `height`, `space`, `vspace`, `perheight` | any cell non-zero |
+
+`ScrollConfig` used to carry `buffsize` and `uppercase`, and its guard used to be `buffsize > 0`; both members are
+gone. The buffer is `WIDGET_BUFF_SIZE` in `options.h` (every conf passed the same 140, and the widget's own
+`init()` default is that macro, with the boot line passing `BOOTSTR_LEN` instead), and `uppercase` never did
+anything at all - `PRETEXT_ALLCAPS` is the switch that works. `conf_tool.py` strips the old pair out of a conf
+file (`trim_scroll_conf()`).
+
+**The guard is one rule, in one place.** `presentOf()` in `widgetsconfig.h` - every cell zero means absent -
+replaced five per-type `present()` overloads and the `zeroed()` patch the clock and the digits needed while the
+rule was `textsize > 0`. It lives in the structs' own header because the same question was answered by five
+copies (display.cpp's tests, `layoutRequiredOk()`, the page's `isEmptyField()` and the tool's
+`is_empty_field()`), and only one of them can be right. `MoveConfig` is exempt everywhere: zero there is a
+displacement, which is what makes a widget yield to the VU. `VuWidget::init()` clamps `perheight` to 1 so the
+rule feeds `_drawBars()`'s division nothing degenerate - a safety fix at the point the value enters, not a
+presence test.
+
+**The badge and the bitrate text keep what they were last handed**, so `Display::_applyBitrate()` is the one place
+that pushes `config.station.bitrate` and `config.configFmt` into them. It is called from the `DBITRATE` request -
+which is the only thing that queues it - and from `_reinitWidgets()` right after the pair is created or re-inited,
+because an init wipes what the widget held and a layout change or a live preview would otherwise leave an empty
+badge until the next track started.
 
 `_fullbitrate` and `_bitrate` are **independent**, not alternatives: the badge is drawn when
 `fullbitrateConf.dimension > 0`, the text when `bitrateConf.textsize > 0`, both when a layout fills both, neither
@@ -3418,10 +4748,11 @@ path (`case VU_STYLE_DIGITAL_LED: _drawBars(true);`). Above the pixel budget the
 factor, so that shape draws literally only where the budget does not bite.
 
 **Two kinds of layout, one drawing rule.** The **bar family** (styles 0-1) draws two strips where `bandsConf` says they
-are, so `rotateVU`, `align` and `boomboxVU` all matter to it, exactly as they always have. **Every other style** (2-6)
-draws into one area, `_cw` x `_ch`: time or frequency runs along its **width**, and the two channels split its
-**height** — except Spectrum Mirror, which splits its **width** — with `boomboxVU` ignored. Nothing transposes - the
-OLED, the rotated TFT box, the portrait TFT box and the BoomBox ribbon get the same picture. The booleans are read in
+are, so the orientation (`vuConf.align`) and the boombox bit (`bb`, which is exactly `align == WA_CENTER`) both matter to
+it, exactly as `rotateVU`/`boomboxVU` did before they were folded into `align`. **Every other style** (2-6) draws into
+one area, `_cw` x `_ch`: time or frequency runs along its **width**, and the two channels split its **height** — except
+Spectrum Mirror, which splits its **width** — with `bb` never consulted there. Nothing transposes - the OLED, the
+rotated TFT box, the portrait TFT box and the BoomBox ribbon get the same picture. The orientation is read in
 `_draw()` for both cases, but only to size the area: `_rotate` picks `_cw = bandsConf.height` with `_ch =
 bandsConf.width * 2 + bandsConf.space`, otherwise it is the other way round. `_fillLocal()` is the only pixel helper;
 the non-bar painters never touch the per-channel geometry. A first cut transposed the non-bar styles onto the area's
@@ -3515,8 +4846,10 @@ a normal build pays nothing for either. The `WIDGET_DEBUG` line in `options.h`'s
 - `OLED_GREYSCALE` with `core/options.h`, default `false` selects the driver's grayscale palette (instead of 1-bit
   mono), and is only valid for `SSD1322` (support removed from`SSD1327`)
 
-`dspcolors.h` is deliberately minimal: only `BOOT_PRG_COLOR`, `BOOT_TXT_COLOR`, `TFT_BG`, `TFT_FG`. Panel-specific
-palettes live with their own drivers.
+`dspcolors.h` is deliberately minimal: only `BOOT_PRG_COLOR`, `BOOT_TXT_COLOR`, `BOOT_DOT_COLOR`, `TFT_BG`, `TFT_FG`.
+Panel-specific palettes live with their own drivers. `BOOT_DOT_COLOR` is the one macro in there with an `#ifndef`
+guard: it defaults to `BOOT_PRG_COLOR`, and exists so a build can lift the animated blob off the speaker and boot glyph
+beside it (`ProgressWidget::setDotColor()`), which is the only two-colour boot line the panel supports.
 
 ## Screen Rendering Fixes (Session: SH1106 YO_MONO)
 
@@ -3526,20 +4859,42 @@ palettes live with their own drivers.
   base class calls itself from `setActive()` and from the layout show/hide helpers - so `Pager::setPage()` and every
   layout change repaint the clock. Gating `Display::_time()` does NOT cover those: that only handles the tick updates,
   which is why a gate there changed nothing at all.
-- `clockTrustworthy()` (`utility.cpp`, declared in `utility.h`) is asked at the top of `_printClock()`. It refuses two
-  states. First, nothing has set the time yet: `network.timeinfo.tm_year + 1900 <= 1901` is the zeroed struct, which is
-  what the no-RTC radio showed as `00:00` until the first `doSync()` (1901 rather than a modern floor, so a device that
-  never syncs can never cross it). Second, an RTC that disagrees with an established system clock by more than a minute,
-  or in the year - because `RTC::getTime()`/`setTime()` carry whatever zone the chip happens to hold, so a chip set by
-  another tool prints a plausible-looking UTC, right year and right minute, which no plausibility test can catch.
-- **The comparison needs an established system clock, and that is a separate condition** (`now > 31536000`, one year of
-  epoch - far above any uptime, far below any real date). `localtime()` only becomes local once `configTzTime()` has
-  run, which happens at the WiFi-connect event, so before that a UTC chip agrees with `localtime()` perfectly and gets
-  printed as local. That was the RTC radio's remaining UTC step after the first attempt at this gate. With the clock
-  unset the chip is trusted only when `network.status == SDOFFLINE` (the chip is the only source there will ever be);
-  online it is blocked until SNTP and `doSync()` have spoken.
+- `clockTrustworthy()` (`utility.cpp`, declared in `utility.h`) is asked at the top of `_printClock()`. With
+  `network.timeinfo` now a pure cache (see below) it asks one thing: has anything set the cache? `network.timeinfo.tm_year
+  + 1900 <= 1901` is the zeroed struct, which is what the no-RTC radio showed as `00:00` until the first `doSync()` (1901
+  rather than a modern floor, so a device that never syncs can never cross it). **There is no RTC-agreement test any
+  more**: the cache is copied from the system clock whenever that is set, so an RTC in another zone can no longer reach
+  the glass - the chip only fills the cache while the system clock is unset, which is the one case with nothing to agree
+  with.
+- **"Is the system clock set" and "what is its local time" are one read**, `systemLocalTime()` (`utility.cpp`, declared in
+  `utility.h`): the one-year-epoch floor (`now > 31536000`, far above any uptime, far below any real date), the
+  `time(NULL)` and the `localtime_r()`. Both `clockTrustworthy()` and `refreshClock()` ask it instead of each doing that
+  read themselves. `localtime()` only becomes local once `configTzTime()` has run, which happens at the WiFi-connect
+  event. When the system clock is unset the chip is trusted only when `network.status == SDOFFLINE` (the chip is the only
+  source there will ever be); online it is blocked until SNTP and `doSync()` have spoken.
 - The first genuine paint needs no help from the gate: `ticks()` (RTC) and `doSync()` (network) both request `CLOCK` the
   moment they have something to show, and `_getTime()` reports a change because `_timebuffer` starts at `"00:00"`.
+
+### One producer for network.timeinfo: refreshClock() (network.cpp, utility.cpp)
+- **`refreshClock()` (`network.cpp`) is the single place `network.timeinfo` is made current and the only place `ticks()`
+  queues `CLOCK`.** `network.timeinfo` is a **pure cache** of the most reliable clock available, refreshed every tick and
+  never advanced by hand. The authority order is:
+    1. **the system clock**, once SNTP has set it (`systemLocalTime()`). It is disciplined and keeps running across a
+       WiFi outage, so it is read **regardless of `network.status`**;
+    2. **otherwise the RTC chip**, when one is present - the only source across an offline boot;
+    3. **otherwise nothing**, leaving the cache as it is.
+- **The old hand-incremented clock is gone.** `ticks()` used to advance a second, private clock (`tm_sec++` + `mktime()`)
+  in parallel with the SNTP-disciplined system clock, which is why the display drifted and "bounced" when NTP snapped it
+  back. Two more defects went with it: the increment was used while merely *offline* (worse than the system clock, which
+  is still valid then), and in RTC builds the chip overwrote the cache every tick even when the system clock was
+  authoritative, letting an inaccurate cell lead the display. With no source the increment only ever advanced a struct
+  there was nothing to show, because `clockTrustworthy()` gates the print.
+- **The `:01s` RTC-drift check is deleted.** With the cache copied from the system clock whenever that is set, the cached
+  value and `localtime()` can never disagree, so the check could never fire. The chip is kept in step by `doSync()`'s
+  periodic `rtc.setTime()` instead. This is the ESP8266/yoRadio single-clock shape finally restored: one authoritative
+  source, cached for the display.
+- A seconds-level skip or repeat during an NTP slew is expected and correct - the display is honestly tracking the real
+  clock.
 
 ### ClockWidget colon blink (widgets.cpp)
 - The seconds-area `fillRect` at line 813 is guarded by `if (Clock_GFXfontPtr != NULL)` — its Y-position formula
@@ -3547,12 +4902,54 @@ palettes live with their own drivers.
   the fillRect would clear into title rows.
 
 ### Screensaver clock boundaries (display.cpp, widgets.h)
-- `minTop = max(TFT_FRAMEWDT, _clock->timeHeight())` — for framebuffer displays, `_config.top - _timeheight` must stay
+- `minTop = max(TFT_BORDER, _clock->timeHeight())` — for framebuffer displays, `_config.top - _timeheight` must stay
   >= 0 to avoid framebuffer clipping above the display.
-- `maxTop = dsp.height() - clockH - TFT_FRAMEWDT` — was missing the `-clockH` term, allowing the clock to render
+- `maxTop = dsp.height() - clockH - TFT_BORDER` — was missing the `-clockH` term, allowing the clock to render
   partially off-screen.
 - Movement interval now uses `% SCREENSAVERMOVE` (default 5 seconds) instead of hardcoded `% 60`.
 - `ClockWidget::timeHeight()` accessor added to expose `_timeheight`.
+- **Hiding a framebuffer clock has to push the window.** `psFrameBuffer::clear()` fills the PSRAM buffer only and
+  never touches the panel, so `ClockWidget::_clearClock()`'s `PSFBUFFER` branch must `_fb->display()` after it —
+  `_clearClock(bool push = true)` is that flag, and only `_printClock()`'s force path passes `false` (that path
+  repaints and displays the same window itself, so a blit there would only flash). Without the push, locking a TFT
+  clock wiped its buffer and left the last `display()` frame on the panel: the "clock ghost" behind the VU, plus the
+  clock's background over the title rows sharing its band. The erase is deliberately **not** gated on `painted()` —
+  `Widget::lock()` calls `_reset()` first, which recreates the buffer and clears that flag, so a guard there would
+  skip exactly the erase that matters; the OLED branch fills its rect unconditionally, and gating would make the two
+  families diverge. The erase logs under `WIDGET_DEBUG` (tag `Widgets.debug`): the window in PANEL coordinates, the
+  framebuffer's own size and `painted()` — the pair to read when an erase does not take, since `_left()`/`_top()` are
+  buffer coordinates.
+- **Hide the clock BEFORE its neighbours are drawn, or the hide's erase eats them.** `_reinitWidgets()` applies the
+  clock's feature lock right after `init()` — `if (_clockHidden()) { _clock->lock(true); _clock->setActive(false); }
+  else showByLayout(_clock);` — for two reasons. `Widget::init()` clears `_locked`, so `showByLayout()` would draw a
+  clock the state hides; and the erase a later hide performs is a background push over the clock's whole window,
+  which is the band the VU and the moved weather line share. Erasing last (the `_clock->clear()` that used to end
+  `_applyState()`) punched a background rectangle through the weather, and nothing repaired it:
+  `hideWeatherIfChanged()` returns early for a line that is already visible, and `ScrollWidget::setText()` does
+  nothing while the string is unchanged. `_layoutChange()` still erases on a page that is already drawn (the
+  play/stop transition), so it calls `_weather->repaint()` for exactly that case.
+  **`repaint()` is virtual, and a `ScrollWidget` overrides it to call its own `_draw()`.**  `TextWidget::repaint()`
+  reaches `_paint()`, whose erase is unclipped and as wide as `_textwidth` — which on a scroll is the WHOLE string,
+  not the span — so a repaint of the weather uncovered the row from the end of its 50 px span out to the full
+  string's width, straight through a divider painted beside it.  `_draw()` erases only the span while scrolling and
+  only its own text rectangle otherwise, and clips every print, so the uncovered pixels are always the ones it
+  repaints.  The other `repaint()` caller, the SD manager's countdown, is a plain `TextWidget` where the wide erase
+  is exactly right.
+- **The clock's window is offset by `_config.top - _timeheight`, and any trace of it must say so.** `_left()`/`_top()`
+  return `0`/`_timeheight` once the canvas is ready, so they are **buffer** coordinates: a clock with `top = 218` and
+  a 70 px cell has its window at y = 148, not at the panel top. Two wrong diagnoses came out of a log that printed
+  only the buffer pair — `clockMove = { }` in "Big Text" hides a clock at y 148, over the weather (135) and behind
+  the VU (175).
+- **Every mode change used to unlock the clock.** `_switchMode()`'s else-branch runs for EVERY new mode that is not
+  the screensaver, and it ended with an unconditional `_clock->lock(false)` under a comment claiming `_clockHidden()`
+  would re-lock it — but `_reinitWidgets()` and `_layoutChange()` are the only sites that apply `_clockHidden()`, and
+  a mode change goes through neither. So a clock whose layout yields to the VU was unlocked by any mode change (a
+  WebUI press, the volume page, the playlist) and its own per-second `draw()` then painted it behind the meter and
+  over the weather line, with nothing in the log to say why — a refusal was the only record `draw()` produced, so a
+  clock that was really painting left no trace at all. It is `lockIfChanged(_clock, _clockHidden())` now, the same
+  one definition the other two sites apply. The lesson generalises: a widget's feature lock belongs to
+  `_clockHidden()`/`vuLive()` and their kin, so every site that changes a lock must apply that definition rather
+  than a bare `lock(true)`/`lock(false)`.
 
 ### NumWidget volume-digit clearing (widgets.cpp)
 - YO_MONO clear height: `realth = _textheight * CHARHEIGHT` (was OLED-only; now applies to all displays with
@@ -3567,6 +4964,10 @@ palettes live with their own drivers.
 ---
 
 ## Screen Rendering Fixes (Session: VU Rotated Layout)
+
+> **Superseded in round 4:** `LayoutData::rotateVU` and `LayoutData::boomboxVU` no longer exist — the VU's orientation
+> is `vuConf.align` (`WA_LEFT` default / `WA_CENTER` boombox / `WA_RIGHT` rotated). The notes below describe the code
+> as it was when that session landed.
 
 - **New layout flag** `LayoutData::rotateVU` (exposed via `rotateVU_ptr`), treated exactly like `boomboxStyle` — absent
   means false. `VuWidget::_rotate` is read from `rotateVU_ptr` in `init()`.
@@ -3594,41 +4995,61 @@ Two macros control core assignment across the codebase:
 | `NETWORK_CORE` | `1` | `0` | Core for netserver and all network/utility tasks |
 | `DSP_TASK_CORE_ID` | `1` | `0` | Core for the display loop task (independent of `NETWORK_CORE`) |
 
-On single-core ESP32-C3 (`CONFIG_FREERTOS_UNICORE`), all three macros are forced to `0` automatically; defining any of
-them manually on a unicore build is a compile-time `#error`.
+Both supported targets are dual-core, so the three macros keep their defaults and are never forced.
 
 `NETWORK_CORE` is derived in **`options_overrides.h`** as well as here - a deliberate duplicate (the one place in this
 codebase where the same rule lives twice, because the value must reach AsyncTCP, a translation unit that never sees
 `options.h`). That header is force-included and compiled first, so it owns the value and the copy here is a no-op in
 those builds; in builds without the force-include (the other `builds/*` templates) the copy here is what defines it.
-Both copies are written to survive being evaluated twice: the dual-core branch is `#ifndef NETWORK_CORE`, and the
-unicore `#error` fires only when the value it finds is not 0, so it cannot mistake our own definition for one a user
-set. `CONFIG_ASYNC_TCP_RUNNING_CORE` defaults to `NETWORK_CORE` so the AsyncTCP internal event task follows
-automatically, and both are deliberately overridable in `myoptions.h`.
+Both copies are `#ifndef NETWORK_CORE`, so evaluating them twice is harmless. `CONFIG_ASYNC_TCP_RUNNING_CORE` defaults
+to `NETWORK_CORE` so the AsyncTCP internal event task follows automatically, and both are deliberately overridable in
+`myoptions.h`.
 
 The health of the force-include channel is observable: the Done-button panic in the SD manager (`LoadProhibited` on core
 1) has not recurred since the override landed, although that is a single observation - correlation, not a proven
 mechanism. The unpinned `async_tcp` task floating onto core 1 during a mode switch is the plausible link.
 
-### Board Stack Multiplier (`STACK_MULTIPLIER`)
+### Stack sizes: real KB, and they are BYTES to xTaskCreate (2026-10-20)
 
-A board-aware multiplier scales all five user-configurable FreeRTOS task stacks automatically:
+**In ESP-IDF `StackType_t` is `uint8_t`, so `xTaskCreate`'s stack depth counts BYTES and
+`uxTaskGetStackHighWaterMark()` answers in BYTES.** `KB * 1024` at each call site was therefore correct all along.
 
-| Board | `STACK_MULTIPLIER` | Effect |
-|---|---|---|
-| ESP32-S3 | 2 | All base stack sizes doubled |
-| ESP32 | 1 | Base sizes unchanged |
-| ESP32-C3 | 1 | Base sizes unchanged (C3 has *less* RAM than base ESP32) |
+That is worth recording because a 2026-10-20 refactor got it exactly backwards: it assumed words, so it multiplied
+every KB value by 4 *and* divided by `sizeof(StackType_t)` (which is 1, so the division was a no-op). Every stack
+grew 4x, ~90 KB of internal heap disappeared at boot (134820 -> 45064), and the WebUI could no longer serve its
+assets - `nsQueue overflow, dropped req=...` with `[Heap] 44KB free, 10KB largest block`. The tell was in the build
+log's own arithmetic: `webBringUp task could not be created (32768 words, ...)` printed `32 * 1024 / sizeof(StackType_t)`
+as 32768, which is only possible if that sizeof is 1.
 
-- Defined automatically after the board guard in `src/core/options.h`. Override in `myoptions.h` with `#define
-  STACK_MULTIPLIER 1` or `2` if needed.
-- Only values `1` and `2` are accepted — a compile-time `#error` fires otherwise.
-- Per-task manual overrides (e.g. `#define DSP_TASK_STACK_SIZE 6`) bypass the multiplier; a `#elif` range guard
-  validates the manually-set value.
-- The multiplier applies **only** to the five configurable task stacks. Fixed-stack tasks (HTTPS workers, OTA) are
-  unaffected.
-- `SEARCHRESULTS_BUFFER` and `CONFIG_ASYNC_TCP_QUEUE_SIZE` use separate per-board explicit values (not
-  `STACK_MULTIPLIER`) since they scale differently.
+The contract now:
+
+- `*_TASK_STACK_SIZE` macros are **kilobytes**, each call site passes `KB * 1024` **bytes**, and nothing divides
+  by `sizeof(StackType_t)`.
+- **`STACK_MULTIPLIER` is gone**, with its 2x folded into the defaults, so the numbers below are the sizes that
+  have actually been running in the field (yoRadio's originals were half these).
+- The monitor and every `[Core.HWM]` line print `uxTaskGetStackHighWaterMark()` raw, which is bytes - no `* 4`
+  anywhere (the old `startup.cpp` and async prints had one, understating their headroom by 4x).
+
+  | Task | macro | bytes |
+  |---|---|---|
+  | `loopTask` | `LOOP_TASK_STACK_SIZE` = 16 | 16 KB |
+  | `DspTask` | `DSP_TASK_STACK_SIZE` = 8 | 8 KB |
+  | `netserverLoopTask` | `NETSERVER_TASK_STACK_SIZE` = 8 | 8 KB |
+  | `doSync` / `retryStreamConnection` / `wifiReconnectionTask` | `NETWORK_TASK_STACK_SIZE` = 8 | 8 KB |
+  | `startupServicesAsync` | `STARTUP_TASK_STACK_SIZE` = 8 | 8 KB |
+  | `webBringUpTask` | `WEB_BRINGUP_TASK_STACK_SIZE` = 8 | 8 KB |
+  | `async_tcp` | `CONFIG_ASYNC_TCP_STACK_SIZE` = 8192 (bytes) | 8 KB, halved from the library's 16384 |
+
+  Measured headroom, from boots that were healthy: `[async_tcp]` 4.6 KB free of 8 KB; `[startupServices]` ~5 KB
+  free of 8 KB (its raw HWM 4952 before the `*4` was removed). Those are tight-looking but they are what has been
+  running; a future pass can now read them correctly and shrink deliberately, one task at a time.
+
+- **`the High Water Mark is in words too.** `uxTaskGetStackHighWaterMark()` returns words; `main.cpp`'s monitor line
+  used to print them labelled "free bytes", understating every task's headroom by 4x - which is how the oversized
+  stacks looked safe. It now multiplies by `sizeof(StackType_t)`, so `Main/Display/Netserver` in the monitor are
+  bytes and are directly comparable with the `[Core.HWM]` lines.
+- `MIN_MALLOC` is pinned at 24112 (it used to be `12056 * STACK_MULTIPLIER`) so the guard's behaviour did not move.
+- `config.cpp`'s boot log prints these KB values, which are now truthful.
 
 ### Core 0 — Audio
 
@@ -3671,26 +5092,28 @@ A board-aware multiplier scales all five user-configurable FreeRTOS task stacks 
 ### FreeRTOS Task Reference
 
 Stack sizes and priorities are controlled by macros in `src/core/options.h` (`/* Tweaks for Core Processes */`). Higher
-priority = more CPU; Arduino `loop()` runs at priority 1. Priority 0 is idle-level (starved) and is never used. Per-task
-local conversion macros (`_BYTES`) are defined at the top of each `.cpp` file (except `SET_LOOP_TASK_STACK_SIZE` which
-is an `Arduino.h` macro). Stack defaults scale with `STACK_MULTIPLIER` — values shown as ESP32/C3 (1x) / S3 (2x).
+priority = more CPU; Arduino `loop()` runs at priority 1. Priority 0 is idle-level (starved) and is never used.
+**Every stack figure below is KB of real bytes**, converted at its call site with `STACK_KB_TO_WORDS()`; the fixed
+ones that are still raw literals are marked as **words** (x4), which is where the old 4x overshoot lived.
+`STACK_MULTIPLIER` no longer exists - see the section above for why.
 
-| Task | File | Stack macro (default ESP32 / S3) | Priority macro (default) | Notes |
+| Task | File | Stack | Priority macro (default) | Notes |
 |---|---|---|---|---|
-| `loopTask` | main.cpp | `LOOP_TASK_STACK_SIZE` KB (8 / 16) | 1 (framework) | Arduino loop(); `SET_LOOP_TASK_STACK_SIZE()` applies at boot |
-| `DspTask` | display.cpp | `DSP_TASK_STACK_SIZE` KB (4 / 8) | `DSP_TASK_PRIORITY` (2) | — |
-| `netserverLoopTask` | netserver.cpp | `NETSERVER_TASK_STACK_SIZE` KB (4 / 8) | `NETSERVER_TASK_PRIORITY` (2) | — |
-| `doSync` | network.cpp | `NETWORK_TASK_STACK_SIZE` KB (4 / 8) | `LOW_TASK_PRIORITY` (1) | Time/weather sync |
-| `searchWiFi` ×2 | network.cpp | `NETWORK_TASK_STACK_SIZE` KB (4 / 8) | `NET_TASK_PRIORITY` (3) | — |
-| `retryStreamConnection` | network.cpp | `NETWORK_TASK_STACK_SIZE` KB (4 / 8) | `NET_TASK_PRIORITY` (3) | Post-disconnect reconnect |
-| `retryStreamConnection` | player.cpp | `NETWORK_TASK_STACK_SIZE` KB (4 / 8) | `NET_TASK_PRIORITY` (3) | Stream drop reconnect; was hardcoded to Core 0 (bug) |
-| `vTaskFetchCuratedIndex/Playlist` | commandhandler.cpp | 8192 fixed | `LOW_TASK_PRIORITY` (1) | HTTPS — stack hardcoded |
-| `vTaskSearchRadioBrowser` | netserver.cpp | 8192 fixed | `LOW_TASK_PRIORITY` (1) | HTTPS — stack hardcoded |
-| `playbackTask` (lambda) | netserver.cpp | 4096 http / 8192 https | `PLAYBACK_TASK_PRIORITY` (3) | Dynamic stack based on URL scheme |
-| `rbClickTask` (lambda) | netserver.cpp | 8192 fixed | `LOW_TASK_PRIORITY` (1) | HTTPS — stack hardcoded |
-| `checkForOnlineUpdateTask` (lambda) | netserver.cpp | 8192 fixed | `LOW_TASK_PRIORITY` (1) | HTTPS — stack hardcoded |
-| `startOnlineUpdateTask` (lambda) | netserver.cpp | 16384 fixed | `NET_TASK_PRIORITY` (3) | OTA — stack hardcoded |
-| `startupServicesAsync` | startup.cpp | 8192 fixed | `LOW_TASK_PRIORITY` (1) | HTTPS — stack hardcoded |
+| `loopTask` | main.cpp | `LOOP_TASK_STACK_SIZE` (64 KB) | 1 (framework) | Arduino loop(); `SET_LOOP_TASK_STACK_SIZE()` applies at boot |
+| `DspTask` | display.cpp | `DSP_TASK_STACK_SIZE` (32 KB) | `DSP_TASK_PRIORITY` (2) | unshrinkable until the HWM readings are trusted again |
+| `netserverLoopTask` | netserver.cpp | `NETSERVER_TASK_STACK_SIZE` (32 KB) | `NETSERVER_TASK_PRIORITY` (2) | ditto |
+| `webBringUpTask` | startup.cpp | `WEB_BRINGUP_TASK_STACK_SIZE` (32 KB) | `LOW_TASK_PRIORITY` (1) | `netserver.begin()` + `startLoopTask()` + `NEWIP` |
+| `doSync` | network.cpp | `NETWORK_TASK_STACK_SIZE` (32 KB) | `LOW_TASK_PRIORITY` (1) | Time/weather sync - **TLS**, so unmeasured and unchanged |
+| `searchWiFi` ×2 | network.cpp | `NETWORK_TASK_STACK_SIZE` (32 KB) | `NET_TASK_PRIORITY` (3) | — |
+| `retryStreamConnection` | network.cpp | `NETWORK_TASK_STACK_SIZE` (32 KB) | `NET_TASK_PRIORITY` (3) | Post-disconnect reconnect |
+| `wifiReconnectionTask` | network.cpp | `NETWORK_TASK_STACK_SIZE` (32 KB) | `NET_TASK_PRIORITY` (3) | Spawned by the disconnect event and the `ticks()` self-heal |
+| `vTaskFetchCuratedIndex/Playlist` | commandhandler.cpp | 8192 **words** (32 KB) | `LOW_TASK_PRIORITY` (1) | HTTPS — still a raw literal |
+| `vTaskSearchRadioBrowser` | netserver.cpp | 8192 **words** (32 KB) | `LOW_TASK_PRIORITY` (1) | HTTPS — still a raw literal |
+| `playbackTask` (lambda) | netserver.cpp | 4096 http / 8192 https **words** (16/32 KB) | `PLAYBACK_TASK_PRIORITY` (3) | Dynamic stack based on URL scheme |
+| `rbClickTask` (lambda) | netserver.cpp | 8192 **words** (32 KB) | `LOW_TASK_PRIORITY` (1) | HTTPS — still a raw literal |
+| `checkForOnlineUpdateTask` (lambda) | netserver.cpp | 8192 **words** (32 KB) | `LOW_TASK_PRIORITY` (1) | HTTPS — still a raw literal |
+| `startOnlineUpdateTask` (lambda) | netserver.cpp | 16384 **words** (64 KB) | `NET_TASK_PRIORITY` (3) | OTA — still a raw literal |
+| `startupServicesAsync` | startup.cpp | `STARTUP_TASK_STACK_SIZE` (32 KB) | `LOW_TASK_PRIORITY` (1) | HTTPS downloads |
 | MQTT client task (library-owned) | PsychicMqttClient | 6144 (library default) | `NET_TASK_PRIORITY` (3) | Plain TCP; `Mqtt::loop()` runs on `netserverLoopTask`, not here. Apply is held while the startup downloads are running |
 
 ### CORE_MONITOR debug feature (opt-in)
@@ -3732,7 +5155,17 @@ Emits to serial + telnet every 5 seconds:
   `AUDIO_CORE`, `NETWORK_CORE`, `CONFIG_ASYNC_TCP_RUNNING_CORE` and `DSP_TASK_CORE_ID` are assigned. Only defined on a
   dual-core build.
 - **Stack high water marks**: `Main`, `Display`, `Netserver` minima, never reset between windows.
-- **LittleFS, Heap and PSRAM lines**, rate-limited by `CORE_MONITOR_ETC_LOOPS` (default 5 cycles = 25 s).
+- **The `[Heap]` line and its integrity walk run EVERY cycle** (5 s), not every fifth: the TLSF assertion inside
+  `block_locate_free` fires within seconds of a corruption appearing, so a 25-second window usually misses it. The walk
+  is what makes a free-list corruption visible at all - `tlsf_check()` validates the `fl_bitmap`/`sl_bitmap` against the
+  free lists, so `heap ok` means it, but only for the instant it ran. Because the other core is allocating throughout,
+  a single `CORRUPT` is a strong suspicion rather than a proof; the reading that matters is a `CORRUPT` followed by a
+  panic.
+- **A `CORRUPT` reading is stashed in RTC memory** (`coredump::noteHeapCorruption()`), which a panic's
+  `RTC_SW_CPU_RST` does not clear - the same mechanism `recoveryReboots` uses. The next boot's `coredump::archive()`
+  prints it **above** the crashdump text, so the file says the heap was already broken before the allocation that
+  tripped over it, which is the half of the story the dump alone cannot tell.
+- **LittleFS and PSRAM lines** stay rate-limited by `CORE_MONITOR_ETC_LOOPS` (default 5 cycles = 25 s).
 
 - **The monitor does not measure audio.** It counts the display task and the Arduino `loop()`; on the common builds both
   are pinned to core 1, so a `Core layout: core0 (Audio)` line means core 0 carries no counter at all and its load has
@@ -3759,7 +5192,7 @@ This section calls out hardware implementations that diverge from the common cod
 - **The I2S audio task's stack lives in the library header, not in `options.h`**: `AUDIO_STACK_SIZE` in
   `I2S_Audio/Audio.h` is a plain `static const size_t` (3500 words since it was raised from 3300 for a station that
   overflowed it - `MPEG-2.5, Layer I` on `echoesofbluemars.org`, panic shape `Stack canary watchpoint triggered
-  (PeriodicTask)` on core 0). It is not scaled by `STACK_MULTIPLIER` and cannot be tuned from `myoptions.h`; the
+  (PeriodicTask)` on core 0). It is not read from `options.h` and cannot be tuned from `myoptions.h`; the
   header has to be edited. The full write-up is in `src/libraries/i2s-frankenstein-surgery-notes.md`, Addendum 2 -
   including why it was *not* the task watchdog and *not* the AsyncTCP priority or core. The VS1053 library keeps its
   own `AUDIO_STACK_SIZE` (`audioVS1053Ex.h`); it was raised to the same 3500 for parity, which is alignment rather
@@ -3805,11 +5238,11 @@ libraries embedded directly in the repository, mostly inherited from yoRadio and
 - `SSD1322/` — SSD1322 OLED driver (slightly modified from JamesHagerman)
 
 ### Audio decoder libraries
-- `I2S_Audio/` — software I2S audio decoder (adapted from schreibfaul1/ESP32-audioI2S via Maleksm's yoRadio mod). PSRAM
-  buffer size now configurable via `PSRAM_BUFSIZE` macro.
+- `I2S_Audio/` — software I2S audio decoder (adapted from schreibfaul1/ESP32-audioI2S via Maleksm's yoRadio mod). The
+  audio input and FLAC reserved buffer sizes are set inside the library; PSRAM is required (enforced in `options.h`).
 - `VS1053_Audio/` — VS1053 hardware decoder driver (adapted from schreibfaul1/ESP32-vs1053_ext via Maleksm's yoRadio
-  mod). PSRAM buffer size now configurable via `PSRAM_BUFSIZE` macro. `stopSong()` SM_CANCEL sequence now guarded by
-  `if(m_f_running)` — prevents permanently stuck CANCEL bit when stop is called during init with no song playing.
+  mod). PSRAM is required. `stopSong()` SM_CANCEL sequence now guarded by `if(m_f_running)` — prevents permanently stuck
+  CANCEL bit when stop is called during init with no song playing.
   `VS_PATCH_ENABLE` forced `false` on this hardware — FLAC patches produce audio silence on this VS1053 variant.
 - `ES8311_Audio/` — ES8311 codec driver (written for ehRadio by kasperaitis)
 
@@ -4073,4 +5506,5 @@ by the shared HTTP/MQTT/Telnet non-WebUI policy.
 ---
 
 > Tracked issues and risk notes are in `.github/code-issues.md`.
+
 

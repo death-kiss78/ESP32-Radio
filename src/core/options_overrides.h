@@ -23,22 +23,12 @@ in options.h so they stay out of each other's way!
 #endif
 
 // And this determines what core Network services are on
-// The following tree is duplicated in options_system.h AND options_overrides.h so if changes are needed, change both files
-#if defined(CONFIG_FREERTOS_UNICORE)
-  #ifdef NETWORK_CORE // need this extra check because both files may be pulled into the build
-    #if NETWORK_CORE!=0
-      #error Do not try to define NETWORK_CORE on a single-core ESP - it will be handled automatically!
-    #endif
-  #else
+// The following tree is duplicated in options.h AND options_overrides.h so if changes are needed, change both files
+#ifndef NETWORK_CORE
+  #if VS1053_CS!=255
     #define NETWORK_CORE 0
-  #endif
-#else
-  #ifndef NETWORK_CORE
-    #if VS1053_CS!=255
-      #define NETWORK_CORE 0
-    #else
-      #define NETWORK_CORE 1
-    #endif
+  #else
+    #define NETWORK_CORE 1
   #endif
 #endif
 
@@ -60,6 +50,15 @@ in options.h so they stay out of each other's way!
 #endif
 #ifndef CONFIG_ASYNC_TCP_PRIORITY
   #define CONFIG_ASYNC_TCP_PRIORITY 4 // library default is 10 (2 is same as audio task, 3 is highest, 4 puts it above everything else)
+#endif
+// AsyncTCP's event task stack.  **This is WORDS, not bytes** - xTaskCreateUniversal passes it straight to
+// xTaskCreate, so the library default of 8192 * 2 is 16384 words = 64 KB, not 16 KB.  A boot log with CORE_MONITOR
+// measured that task using ~15 KB (the "[Core.HWM] [async_tcp]" line prints the free bytes left), so 8192 words
+// (32 KB) keeps more than twice the observed peak and hands 32 KB of internal heap back to the WebUI - which is
+// the resource its first page load runs out of.  Going lower (4096 = 16 KB) needs an SD-upload HWM reading first:
+// the file manager's upload and OTA handlers also run on this task.
+#ifndef CONFIG_ASYNC_TCP_STACK_SIZE
+  #define CONFIG_ASYNC_TCP_STACK_SIZE 8192
 #endif
 
 #endif // options_overrides_h

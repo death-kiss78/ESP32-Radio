@@ -127,7 +127,7 @@ jobs:
           echo "Repo file links rewritten against ${BASE}/"
 
       - name: Customize firmware.html
-        if: github.repository_owner != 'death-kiss78'
+        if: github.repository_owner != 'trip5'
         run: |
           if [ -f "docs/firmware.html" ]; then
             sed -i "s|const GITHUB_OWNER = '.*'|const GITHUB_OWNER = '${{ github.repository_owner }}'|g" docs/firmware.html

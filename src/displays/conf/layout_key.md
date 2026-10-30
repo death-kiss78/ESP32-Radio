@@ -39,16 +39,17 @@ const char _layoutNames[][64] PROGMEM = {
 
 const LayoutData _layouts[] PROGMEM = {
     {   // Default
-        /* SCROLLS   {{ left, top, fontsize, align }, buffsize, uppercase, width, scrolldelay, scrolldelta, scrolltime } */
-        .metaConf      = {{ TFT_FRAMEWDT, TFT_FRAMEWDT, 2, WA_LEFT }, 140, true, MAX_WIDTH, SCROLLDELAY, 2, SCROLLTIME },
-        .title1Conf    = {{ TFT_FRAMEWDT, 19, 1, WA_LEFT }, 140, true, MAX_WIDTH-24, SCROLLDELAY, 1, SCROLLTIME },
-        .playlistConf  = {{ TFT_FRAMEWDT, 30, 1, WA_LEFT }, 140, true, MAX_WIDTH, SCROLLDELAY/5, 1, SCROLLTIME },
-        /* WIDGETS   { left, top, fontsize, align } */
+        /* SCROLLS   {{ offset, top, fontsize, align }, width, scrolldelay, scrolldelta, scrolltime } */
+        .metaConf      = {{ TFT_BORDER, TFT_BORDER, 2, WA_LEFT }, MAX_WIDTH, SCROLLDELAY, 2, SCROLLTIME },
+        .title1Conf    = {{ TFT_BORDER, 19, 1, WA_LEFT }, MAX_WIDTH-24, SCROLLDELAY, 1, SCROLLTIME },
+        .playlistConf  = {{ TFT_BORDER, 30, 1, WA_LEFT }, MAX_WIDTH, SCROLLDELAY/5, 1, SCROLLTIME },
+        /* WIDGETS   { offset, top, fontsize, align } */
         .bitrateConf   = { 0, 19, 1, WA_RIGHT },
-        .clockConf     = { TFT_FRAMEWDT, 38+FONTSHIFT, 0, WA_CENTER },
-        /* SLIDER BARS {{ left, top, fontsize, align }, width, height, outlined } */
-        .volbarConf    = {{ 0, 64-1, 0, WA_LEFT }, DSP_WIDTH, 1, false },
-        .rotateVU      = true,
+        .clockConf     = { TFT_BORDER, 38+FONTSHIFT, 0, WA_CENTER },
+        /* SLIDER BARS {{ offset, top, 0, 0 }, width, height, outlined } */
+        .volbarConf    = {{ 0, 64-1, 0, 0 }, DSP_WIDTH, 1, false },
+        /* VU BARS WIDGET      { offset, top, 0, align } */
+        .vuConf        = { TFT_BORDER, 38+FONTSHIFT, 0, WA_RIGHT },
     },
 };
 ```
@@ -77,31 +78,55 @@ master for the field order, the types and the section headers - the same order t
 demands of a designated initialiser. Add a field there and re-run `conf_tool.py --clean` to bring
 the conf files back into line.
 
-`WidgetConfig` — a simple positioned widget. All four numbers: `{ left, top, fontsize, align }`.
+`WidgetConfig` — a simple positioned widget. All four numbers: `{ offset, top, fontsize, align }`.
 
-`ScrollConfig` — a line of text that can scroll. `{ { left, top, fontsize, align }, buffsize,
-uppercase, width, scrolldelay, scrolldelta, scrolltime }`.
+`offset` is the widget's distance from the edge `align` names, and `align` does more than move text:
 
-`FillConfig` — a rectangle, solid or as a frame. `{ { left, top, fontsize, align }, width, height,
-outlined }`. With `outlined` false it is a solid fill, which is what every conf in the tree writes
+| `align` | where the widget lands | what `offset` means |
+|---|---|---|
+| `WA_LEFT` (the default) | `x = offset` | the distance from the **left** edge |
+| `WA_RIGHT` | `x = width - textwidth - offset` | the distance from the **right** edge |
+| `WA_CENTER` | centred in the widget's own span | the span's **left** edge, so it shifts the centring |
+
+The first two rows are [`TextWidget::_realLeft()`](../widgets/widgets.cpp); the third needs a span, and a scroll
+always brings one (its `width`) — which is how `weatherMove`/`weatherMoveVU` shift a *centred* line clear of the
+VU. With no span, a centred line's `offset` is inert. The clock is its own case:
+[`ClockWidget::_getTimeBounds()`](../widgets/widgets.cpp) centres it on the screen and then **adds** `offset`, so
+it moves right of centre rather than staying put. The VU is the exception to all of it — its `align` is the
+meter's orientation, see §6 — and a `MoveConfig` has no `align` at all, so a MOVE's `left`/`top` really are a
+left edge and a top. This cell was called `left`, which was true for the first row only (round 9).
+
+`ScrollConfig` — a line of text that can scroll. `{ { offset, top, fontsize, align }, width,
+scrolldelay, scrolldelta, scrolltime }`. The text buffer is not a conf field: it is `WIDGET_BUFF_SIZE`
+in [`options.h`](../../core/options.h), one size for every conf and every widget.
+
+`FillConfig` — a rectangle, solid or as a frame. `{ { offset, top, 0, 0 }, width, height, outlined }`: a fill
+reads neither `fontsize` nor `align`, so both of those cells are written `0`, and the header says so. With
+`outlined` false it is a solid fill, which is what every conf in the tree writes
 today. With `outlined` true it draws only the rectangle's **outline** and leaves the interior alone —
 deliberately, because a frame that cleared its inside would erase the widgets it exists to enclose.
 
 The colour is the same either way, and it is the one the widget was built with: `theme.line` for
-`underLineConf` and `overLineConf`, `theme.metafill` for `metaBGConf`, `metaBGConfInv` and the boot
-band `apTitleBGConf`, `theme.plcurrentfill` for `playlBGConf`. **So an outlined conf looks different
+`underLineConf`, `overLineConf` and `metaBGConfInv` (the rule under the meta when the title is inverted),
+`theme.metabg` for `metaBGConf` and the boot band `apTitleBGConf`, and `theme.plcurrentbg` for
+`playlBGConf`. **So an outlined conf looks different
 from a filled one only once `width` and `height` are both 2 or more**: a rectangle one pixel thick is
 its own outline, which is why `outlined` does nothing to a hairline.
 
 The two sliders are the exception that explains the field's history: `volbarConf` and `bufferbarConf`
 read `outlined` as a one-pixel frame plus a two-pixel inset for the bar inside it, so for them it means
-"is there a frame around the bar" rather than "fill or frame".
+"is there a frame around the bar" rather than "fill or frame".  The frame takes the theme's `volbarout` for the
+volume bar and `buffer` for the buffer bar; the buffer's used to fall back to black, which is why its frame looked
+like the setting was ignored.
 
 `VUBandsConfig` — the VU bar's geometry, five numbers (see §6).
 
-`MoveConfig` — where a widget travels while the screensaver runs (see §7).
+`MoveConfig` — where a widget travels in the two playing states, or hides it (see §7).  The screensaver moves the
+clock itself and ignores this field.
 
-`BitrateConfig` — `{ { left, top, fontsize, align }, dimension }`, the codec badge.
+`BitrateConfig` — `{ { offset, top, fontsize, align }, dimension }`, the codec badge. The widget reads
+`offset`, `top` and `dimension` only — it never looks at `align`, and the centring inside the badge is its own
+square — so the editor greys that cell rather than offering a setting that cannot matter.
 
 | Field | Type | What it is |
 |---|---|---|
@@ -141,17 +166,15 @@ pair makes a panel or a band — and `outlined` decides between a solid fill and
 | `rssiConf` | Widget | WiFi signal |
 | `numConf` | Widget | The large volume/station number |
 | `clockConf` | Widget | The clock |
-| `vuConf` | Widget | Where the VU meter sits |
+| `vuConf` | Widget | Where the VU meter sits. Its `align` is the VU's **orientation**, not a text alignment — see §6 |
 | `fullbitrateConf` | Bitrate | Codec name badge |
 | `bandsConf` | VUBands | The VU bar's shape |
-| `clockMove` | Move | Clock travel while the screensaver runs |
-| `weatherMove` | Move | Weather travel, when no VU is shown |
+| `clockMove` | Move | Clock travel while the meter is live and playing; its zeros hide the clock |
+| `weatherMove` | Move | Weather travel while playing with no meter; its zeros hide the line |
 | `weatherMoveVU` | Move | Weather travel, while the VU is shown |
-| `boomboxVU` | bool | Draw the VU as a "boombox" meter, lit from the middle out |
-| `rotateVU` | bool | Turn the VU 90 degrees (a vertical bar becomes horizontal) |
 | `shareWeatherIP` | bool | The IP and the weather share one row |
 | `shareBattRSSI` | bool | The RSSI and battery share one row |
-| `rssiDigit` | bool | Show the signal as a number instead of bars |
+| `rssiDigit` | bool | Show the signal as a **percentage** instead of bars: 2% per dB from -100 (0%) up to -50 (100%), and 100% above that. The wording is the conf's own `rssiFmt`, so a percent sign there is `%%` |
 
 The five boolean switches are **per layout**, so one conf can have a cramped layout that shares a
 row and a roomy one that does not. `false` is the default - writing them out changes nothing, and
@@ -219,7 +242,7 @@ mean one of them eats the other each time it updates. What each one covers:
 | `volbarConf`, `bufferbarConf` | `width` × `height` at `left`/`top` |
 | `bitrateConf`, `voltxtConf`, `batteryConf`, `iptxtConf`, `rssiConf` | the text's own extent — its length decides, and only the last painted rectangle is ever erased |
 | `clockConf` | the digits and the date/seconds beside them; `top` is their **bottom** edge |
-| `vuConf` + `bandsConf` | `bandsConf.width`×2 + its space, by `bandsConf.height` (swapped when `rotateVU`) |
+| `vuConf` + `bandsConf` | `bandsConf.width`×2 + its space, by `bandsConf.height` (swapped when the orientation is Rotate 90) |
 | `fullbitrateConf` | the badge square, `dimension` × `dimension` |
 
 **`py conf_tool.py --check` computes exactly these**, per layout and per state — stopped, playing with
@@ -260,9 +283,14 @@ the two boxes plainly overlap in the vertical band.
   derived from `DSP_HEIGHT`; it is the layout's own value now, so a layout can size its clock and its
   number page independently. The value each shipped layout carries is what the old `DSP_HEIGHT` rule
   produced for that panel, so nothing moved.
-- **`MAX_WIDTH`** is the usable width inside the border margin, and **`TFT_FRAMEWDT`** is that
-  margin — left/right inset in pixels, despite the name. On the 128x64 OLED the margin is 1 px,
-  which keeps text off the very first and last pixel column.
+  The SIZE is all a layout picks of the face: the Clock Font option (`clockFontId`, one runtime
+  choice for the whole device) draws both the clock and the number, so `numConf` at size 2 and
+  `clockConf` at size 3 are the same design at two sizes. Clock Glow applies to both as well.
+- **`MAX_WIDTH`** is the usable width inside the border margin, and **`TFT_BORDER`** is that margin —
+  the left/right inset in pixels. It was `TFT_FRAMEWDT`, a name that read as a width for a value that
+  is not one; round 8 renamed it, and carried `conf_tool.py --import` with it, so a community conf
+  that still says `TFT_FRAMEWDT` imports as `TFT_BORDER`. On the 128x64 OLED the margin is 1 px, which
+  keeps text off the very first and last pixel column.
 - **`width`** in a scroll config is the width of the scrolling window.
 - **Scroll speed** is `scrolldelta * 1000 / scrolltime` pixels per second. The shipped confs for
   the 128x64 OLED scroll the title at 50 px/s and the playlist at 150 px/s.
@@ -281,6 +309,57 @@ per-layout booleans now, and they are the first two entries of the TRANSFORMS gr
 Which layouts want which, and why, is worked through in `plans/font-overhaul.md` §2.11. The one that
 catches people out is that **the same clock size can go either way**: the 35 px TFT family shows
 neither, while the ILI9225 — a 35 px panel too — shows both.
+
+**At the two smallest clock sizes `fullClock` gives you the date alone.** Size index 0 (no clock font — the
+built-in cell) and 1 (15 px) have no room for a divider column: the divider's gap is a pixel or two, and the
+day of week is an 8 px built-in row squeezed beside the time. So at those sizes the divider and the day of
+week are dropped and the date is kept, on a row of its own below the time. Those two sizes then read as two
+clean rows — the time, with the seconds after it only if `seconds` is on, and the date under it — instead of
+the collapse index 0 used to have, where the date landed on the time's own row and the seconds were raised a
+row above it. **`fullClock` does not switch the seconds on at these two sizes:** the seconds block lives beside
+the divider wherever there is one, so at 0 and 1 it appears only when `seconds` is set as well. Sizes 2 to 4
+are unchanged — there `fullClock` still implies the seconds — and the day of week is what goes, not the date.
+The WebUI withholds **Clock Glow** at these two sizes — the glow needs a clock font's glow character — and
+**Screensaver: full date** only while the clock has no font at all (size 0). At size 1 that row IS offered as
+soon as the layout has `fullClock` or `seconds`, because the switch still governs the SECONDS on the screensaver
+there; what the screensaver never draws at 0 or 1 is the date.
+
+Three details of those two sizes are worth knowing when you lay one out:
+
+- the `seconds` block, when `seconds` is on, follows the time by one gap and sits on the time's own row (at 0
+  and 1 there is no divider column for it to live in), and the clock's box is only as wide as those two rows
+  need;
+- **each of the two lines is aligned on its own** at these sizes: the time (with its seconds) and the date are
+  placed separately by `clockConf.align`, so a centred clock centres its time line and its date line
+  individually rather than centring the block as a whole. `WA_LEFT` starts both at the clock's left edge,
+  `WA_CENTER` centres both on the panel, and `WA_RIGHT` right-aligns both — which is what the date always did
+  above these sizes;
+- the box is sized for whichever row is wider — usually the date — so the date is never clipped.
+
+**The glow is off at size 0, and it follows the row everywhere else.** The clock glow paints the cells the digits
+sit in with `clockbg`, and the big number widget (`numConf`) paints its own with `digitbg`; each needs a clock
+font's own glow character, so at size 0 there is none and the "glow" would be a literal `00:00` behind the time.
+The clock and the number are switched separately (Clock Glow and Digits Glow), so one can glow without the other.
+Size 0 therefore draws no glow at all — the time's, the seconds' and the colon's own off colour alike — and the
+WebUI's Clock Glow row is not offered for a widget that size. Where the glow does apply it starts where the digits
+start, so it follows the same per-row alignment as the time and the colon rather than the box's edge.
+
+### What a size index means for `top`
+
+`fontsize` is a size INDEX, not a pixel height, and the two ends of the ladder anchor differently. Get this wrong
+and a line lands half off the panel - or, at 0, does not appear at all:
+
+| index | the face | what `top` is | where the ink goes |
+|---|---|---|---|
+| 0 | the system font (the panel's own font setting) | the TOP of the digits | DOWN from `top`: one 6x8 cell, rows `top` .. `top + 7` |
+| 1..4 | the clock font's 15/35/52/70 px face | the BASELINE of the digits | UP from `top`, as far as that face is tall |
+
+So a `top` that suits one size does not suit the other: a clock or a number at 0 hangs DOWN from its `top`, while
+at 1..4 it stands ON it. That is what the three small panels' confs assume - the 284x76 puts `numConf` and
+`clockConf` at the same `top` (57) so the two system-font items share one row, and the 128x32's number at `top` 12
+would be drawn off the panel if a 15 px cell stood on it. `fullClock` shows the same split: with a clock font the
+date row is BELOW `top` while the time's ink is above it, so `top` is an anchor between the two rows; at index 0
+the time hangs from `top` and the date follows one row-gap below it.
 
 ### `FONTSHIFT` / `CLOCKSHIFT`
 
@@ -305,27 +384,39 @@ field at zero, so the widget is not created.
 .title2Conf    = { }, // unused
 ```
 
-What that looks like per type:
+What that looks like, and there is only **one** rule now:
 
-| Type | Off when… |
+**Every cell zero means the field is absent.**  A conf's `{ }`, a document's record of zeros and an
+unticked box in the layout editor are all the same statement, so nothing has to be inferred per type:
+
+| Type | Absent when… |
 |---|---|
-| `WidgetConfig` | `fontsize` is 0 — **except `clockConf` and `numConf`**, where presence is "any field non-zero", see below |
-| `ScrollConfig` | `buffsize` is 0 (and `fontsize` is 0) |
-| `FillConfig` | `height` is 0 |
-| `BitrateConfig` | `dimension` is 0 |
+| `WidgetConfig` | all four of `left`, `top`, `fontsize` and `align` are 0 |
+| `ScrollConfig` | its own cells *and* its wrapped widget's are all 0 |
+| `FillConfig` | all seven of the group, `width` and `height` are 0 |
+| `BitrateConfig` | the widget group *and* `dimension` are 0 |
+| `VUBandsConfig` | all five geometry cells are 0 |
 
-Never use a position to decide this: `{ 0, 0 }` is a perfectly valid place to put something.
+Never use a position to decide this: `{ 0, 0 }` is a perfectly valid place to put something — but a
+position on its own is not nothing.  A line at `{ 4, 90 }` with a `fontsize` of 0 counts as present and
+simply draws nothing, which is what the editor shows as struck through but ticked.
 
-### The clock and the digits are the exception
+**A MOVE is the one field whose zeros are a value rather than an absence.**  Zero there is a *displacement*:
+the empty `MoveConfig` means something different for each move (§7) — for the clock and for `weatherMoveVU` it
+makes the widget step aside while the meter runs, while for `weatherMove` it is an honest "no move".  The confs
+still **spell** those zeros `{ }` (and, since round 7, the editor's card comes back unticked for them), but `{ }`
+is only the notation: a MOVE is never counted as an empty field, so its card is never struck through.
+`conf_tool.py` writes an all-zero MOVE as `{ }` too — but without the `// unused` comment the other types get.
 
-`clockConf` and `numConf` count as "present" when **any** of their four fields is non-zero, not when
-`fontsize` is. And `fontsize` is not a text size there at all — it is the clock size index, where **`0`
-is a meaningful value** (draw with the system font, which is what the 128x32 panel does). Two
-consequences:
+### The clock and the digits
 
-- `{ }` still means "no clock", as you would expect.
+`fontsize` there is not a text size at all — it is the clock size **index**, where **`0` is a meaningful
+value** (draw with the system font, which is what the 128x32 panel does).  That used to need an exception
+to the rule; it does not any more, because "any cell non-zero" covers it:
+
 - To put a clock at the very top-left corner you must set a fourth field, for example
-  `.clockConf = { 0, 0, 0, WA_LEFT }` — otherwise it is indistinguishable from "absent".
+  `.clockConf = { 0, 0, 0, WA_LEFT }` — a line of all zeros is indistinguishable from "absent".
+- `numConf` is the same: `.numConf = { 0, 0, 0, WA_CENTER }` centres the digits.
 
 ### `numConf` serves three screens, so test it once
 
@@ -343,10 +434,16 @@ Two consequences worth knowing when you place `numConf`:
   win the row — but the row is also **not** free afterwards: the player page puts it back when the
   number screen closes, so a layout that overlaps `numConf` with the weather line will show the
   weather again a moment after the volume disappears.
-- The clock is *not* covered by the digits — `numConf` draws only its own glyph cells, with no
-  background fill. A layout that overlaps the clock with the digits will therefore show the clock
-  around them; the three number screens hide the clock only where the screen has no ticks of its
-  own to keep them in step (the volume page, the number entry and the SD index screen all do).
+- The clock is *not* covered by the digits — `numConf` draws only its own cells, with no background
+  fill. A layout that overlaps the clock with the digits will therefore show the clock around them;
+  the three number screens hide the clock only where the screen has no ticks of its own to keep them
+  in step (the volume page, the number entry and the SD index screen all do). With Digits Glow ON there
+  *is* a fill: the value is zero-filled to the digits that screen's widest value needs — `VOLUME_SCALE`
+  for the volume, the playlist total for a station/track number — and that many cells are cleared, so a
+  one-digit number owns its whole field and erases that much of an overlapping row.
+- Every screen on the dialog page except the volume page hides the footer's widgets entirely: the station
+  entry, the SD index counter, the update and validator progress, and the info/settings/timezone/wifi/lost/
+  sleeping dialogs. The volume page and the volume overlay keep all of them.
 
 ### What you cannot leave out
 
@@ -357,17 +454,23 @@ playlist page is built on the playlist line. Everything else may be omitted.
 
 ## 6. The VU meter
 
-Three things decide the VU: `vuConf` (where), `bandsConf` (what it looks like) and the two
-switches `rotateVU` and `boomboxVU`.
+Three things decide the VU: `vuConf` (where **and which way round**), `bandsConf` (what it looks like) and
+the VU style selected in the WebUI. `vuConf`'s `align` is not text alignment here — it is the meter's
+**orientation**, and its three values are the whole of the old `boomboxVU`/`rotateVU` pair:
+
+| `vuConf.align` | The VU is drawn… |
+|---|---|
+| `WA_LEFT` (0) | the default: bands stack, lit from the end |
+| `WA_CENTER` (1) | side-by-side **and** middle-out — the boombox form |
+| `WA_RIGHT` (2) | rotated 90 degrees |
 
 Note that the design of the VU Meter applies directly to the "Bars" and "Digital (LED)" style.
 Other VU Styles are derived from this in the code. Design with this in mind.
 
 
 ```c
-.vuConf    = { TFT_FRAMEWDT, 38+FONTSHIFT, 1, WA_LEFT },
+.vuConf    = { TFT_BORDER, 38+FONTSHIFT, 0, WA_RIGHT },
 .bandsConf = { 7, 44, 1, 1, 10 },
-.rotateVU  = true,
 ```
 
 `bandsConf` is `{ width, height, space, vspace, perheight }`:
@@ -381,12 +484,27 @@ Other VU Styles are derived from this in the code. Design with this in mind.
 | `perheight` | how many segments you would like the bar to have |
 
 **Work out the footprint before choosing numbers**, because this is the usual way to push a VU
-off the screen. With `rotateVU = true` (or any non-zero `align`) the bar runs horizontally:
-`height` is its length along x and `width*2 + space` is its height. With `rotateVU = false` and
-`align = WA_LEFT` it runs vertically, the other way round.
+off the screen. With `align = WA_RIGHT` **or** `WA_CENTER` the bars run horizontally: `height` is their
+length along x and `width*2 + space` is their height. Only `WA_LEFT` is the vertical form, the other
+way round.
 
 For the example above the footprint is 15 px tall and 44 px long, placed at `x = 1`,
 `y = 38 + FONTSHIFT`.
+
+### The pixel budget: `VU_MAX_WIDTH` x `VU_MAX_HEIGHT`
+
+The widget will not let a box grow past **280 x 140** (`VU_MAX_WIDTH` and `VU_MAX_HEIGHT`, in
+[`widgetsconfig.h`](../widgets/widgetsconfig.h)); the cap engages **only above** that, so a small panel, an OLED
+and every shipped layout keep exactly the box they ask for.  When the box *is* over, both dimensions are scaled by
+one factor — so the shape survives — and the result is re-centred in the space the conf gave it.  That is why an
+over-size VU arrives as a smaller, differently-shaped meter than the numbers suggest, with nothing on the panel to
+say so.
+
+The measure is the box's own rectangle: `width*2 + space` one way and `height` the other, with the two swapped for
+`WA_RIGHT` (rotated).  The layout editor prints this line above the VU BARS WIDGET group, computed the same way:
+`Max Width: 280 / Max Height: 140 will be enforced if the VU exceeds the pixel budget. This VU uses: N / 39200
+— inside the budget.`, or `— over, so it is drawn about W x H.` when it bites.  It is a warning, not a rule: the
+editor clamps nothing, and the device has the last word.
 
 ### Segments: `perheight` is a maximum, not a promise
 
@@ -416,15 +534,23 @@ style moves the marker with it.
 
 ## 7. Movement, dialogs and `MoveConfig`
 
-`MoveConfig` is `{ left, top, width }` and it means different things depending on `width`:
+`MoveConfig` is `{ left, top, width }`. Which move is read depends on the state, and the empty move means
+something different in each:
+
+| Move | Read when | Its zeros mean |
+|---|---|---|
+| `clockMove` | the meter is live and playing | the clock **steps aside** — hidden while the meter runs |
+| `weatherMoveVU` | the same state | the weather line **steps aside** |
+| `weatherMove` | playing with **no** meter live | the weather line **steps aside** — the same rule as the other two, in the state this move governs.  While stopped none of them apply, and the line sits at `weatherConf` |
+
+Then `width` says what happens whenever the move *is* applied:
 
 | `width` | What happens |
 |---|---|
-| `0` | **Stay at these coordinates.** The widget is put at `left`/`top` and keeps the width its own conf gave it. This is the spelling for "leave it where the conf put it": copy the widget's own `left` and `top`. |
+| `0` | **Stay at these coordinates.** The widget is put at `left`/`top` and keeps the width its own conf gave it. To leave a widget where the conf put it, copy its own `left` and `top`. |
 | more than `0` | Move to `left`/`top` **and** take `width` as the new span — what `WA_CENTER` centres inside, and what a scroll travels within. |
-| the whole entry is `{ }` | **"Yield to the VU."** The widget disappears while the VU meter is on screen and comes back when playback stops — see below. |
 
-`weatherMove` is used when the meter is **off** (while playing) and `weatherMoveVU` when it is on, so a
+`weatherMove` is read when the meter is **off** (while playing) and `weatherMoveVU` when it is on, so a
 weather line can behave differently in the two cases. The clock uses `clockMove` only while the meter
 is on; when the meter is off, or while stopped, both are put back at their own conf positions.
 
@@ -440,13 +566,22 @@ screensaver's way.
 ### Yielding to the VU
 
 If you want the meter to have the row to itself while it is showing, but still want the clock (or
-the weather) when the meter is off, write the move as an empty `{ }`:
+the weather) when the meter is off, write **`clockMove` or `weatherMoveVU`** as an empty `{ }`:
 
 ```c
 .clockMove = { }, // clock disappears while the VU meter is showing
 ```
 
-That is a real behaviour, not "unused". It is why an empty `MoveConfig` is worth reading twice.
+That is a real behaviour, not "unused". It is why an empty `MoveConfig` is worth reading twice — and why
+an empty `weatherMove` is the *opposite*: it is read only while the meter is off, so its zeros mean "no
+move" and it leaves the line where the conf put it rather than hiding it.
+
+**A MOVE that names the widget's own position is also "no move"**, and it is the spelling to use when a state must
+take the line somewhere *else* in another state but leave it alone in this one — an all-zero move would hide it
+instead. It is a true no-op: nothing is erased and nothing is redrawn. It used to do both, and the gap between
+those two passes was a background-coloured line torn across the widget's span (the whole span, not just the text,
+because a scrolling line records its span as the rectangle to erase) — which is what the reporter saw on every
+start and stop of the stream, in the one state where the move and the conf position happen to agree.
 
 ---
 
@@ -481,10 +616,12 @@ That is a real behaviour, not "unused". It is why an empty `MoveConfig` is worth
 ### The rest
 
 - **`fontsize` is a 6x8 cell multiplier**, not points.
-- **`TFT_FRAMEWDT` is a margin**, not a width, despite the name.
-- **`uppercase` does nothing.** Use `PRETEXT_ALLCAPS` in `myoptions.h` instead.
-- **On the VU, `align` is an orientation switch**, not text alignment: `WA_LEFT` means vertical,
-  anything else means horizontal. If `rotateVU` is set, `align` is ignored for the VU.
+- **`TFT_BORDER` is a margin**, not a width. It was `TFT_FRAMEWDT`, which said the opposite.
+- **`uppercase` is gone, and it never did anything.** `PRETEXT_ALLCAPS` in `myoptions.h` is the switch
+  that actually works, and `conf_tool.py --clean` strips the old value out of a conf file.
+- **On the VU, `align` is an orientation switch**, not text alignment: `WA_LEFT` is the default vertical
+  meter, `WA_CENTER` the boombox form and `WA_RIGHT` rotated 90 degrees (§6). The old `boomboxVU` and
+  `rotateVU` booleans no longer exist.
 - **`clockConf` and `numConf` ignore `fontsize`** and count as present if *any* field is set
   (§5). That is the one place where `{ }` and `{ 0, 0, 0, WA_LEFT }` mean different things.
 - **`playlBGConf.height` is only a fallback** — the live playlist row height overrides it
@@ -527,10 +664,42 @@ expecting a fixed number: the set changes as layouts are tried out.
 
 - `_layoutNames[]` and `_layouts[]` have the same number of entries, in the same order.
 - Fields are written in declaration order (§3).
-- Every widget you want is actually switched on — check `fontsize` / `buffsize` / `height`.
-- Everything you placed fits inside `MAX_WIDTH` and `DSP_HEIGHT`. For the VU, that means
-  `width*2 + space` in the thin direction.
+- Every widget you want is actually switched on — no cell of it may be left at zero, or it is absent.
+  In the editor that is the box on the left of the card; in the conf it is `{ }`.
+- Everything you placed fits inside `MAX_WIDTH` and `DSP_HEIGHT`. For the VU that means `width*2 + space`
+  across one side and `height` along the other, and two limits the firmware resolves once, at load (§6):
+  a box over `VU_MAX_WIDTH` x `VU_MAX_HEIGHT` (280 x 140) by AREA is clamped to that rectangle, and a box
+  that then runs past the panel — `left + boxW` or `top + boxH` — is not drawn at all. The editor marks the
+  cells responsible; it never clamps what you type.
 - Widgets sharing a line have `shareWeatherIP` / `shareBattRSSI` set.
 - `FONTSHIFT` is accounted for on `clockConf`, `numConf` and `vuConf`.
 - Build and flash, then look at the real screen — positions near the edges and the exact
   `FONTSHIFT` are the two things that only the hardware can settle.
+
+---
+
+## 11. Custom layouts — the same layout, edited on the device
+
+A conf file's `_layouts[]` is compiled in, but the device can also hold **ten saved layouts** of its own, as
+`/data/layout1.json` … `/data/layout10.json`, edited from `editor.html` (the same page as the theme editor).
+They appear in the WebUI's layout list beside the built-in ones, and — unlike a theme, which is meaningless on
+a one-bit panel — they are offered on every display family.
+
+What that means for a layout author:
+
+- **A saved layout is the same set of fields as a conf entry**, edited one card per field, in the conf file's
+  own order and grouped by its own section headers. Nothing else changes: the boot screens are still the
+  conf file's `_bootConfig`, and the ten slots cannot restyle them.
+- **The file holds numbers, never a macro.** `8` is `8`, whether the conf file spells that `TFT_BORDER` or
+  not. The editor states the panel's own numbers — the border inset and the scroll defaults — once, under the
+  `Display type` line, and marks a `left` or `top` that falls off the panel, which is the closest a browser can
+  come to validating an expression.
+- **`py conf_tool.py --fromjson` is the way back into a conf file.** It appends the saved layout as an entry
+  with the numbers left as numbers: round 8 removed the tool's revival of a value into a macro name, which is
+  how a `bandsConf` cell meaning "how many bands" had been coming back as `TFT_BORDER`. See
+  [`conf_tool.md`](conf_tool.md) mode 4.
+- **The two lines a layout cannot do without are refused at save time**, on the page and on the device:
+  `metaConf` and `playlistConf`, for the reason in §5. Everything else may be `{ }`.
+- **A layout file records the screen it was made for** (`"screen": "320x240"`). A file naming a different
+  panel size reads as an empty slot rather than being offered, because the numbers are pixel positions for
+  one screen and applying them elsewhere draws a layout nobody asked for.

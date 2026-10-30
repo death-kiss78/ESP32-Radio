@@ -6,11 +6,8 @@
 #include <ctype.h>
 #include <cstdlib>
 #include <cstring>
-
-#ifndef ARDUINO_ESP32C3_DEV
-  #include <driver/rtc_io.h>
-#endif
-
+#include <stdarg.h>
+#include <driver/rtc_io.h>
 #include "backlightcontrols.h"
 #include "config.h"
 #include "display.h"
@@ -19,36 +16,31 @@
 #include "player.h"
 #include "../displays/tools/pretext.h"
 
-bool clockTrustworthy() {
-  // The clock may only print a time the device can stand behind. Two ways it could not, both visible at boot:
-  //   1. Nothing has set the time yet - network.timeinfo is a zeroed struct, i.e. year 1900, so 1901 or less IS the
-  //      "never set" state and no arbitrary epoch floor is needed: the zeroed struct is its own marker.
-  //   2. The RTC and the clock disagree. RTC::getTime()/setTime() carry whatever zone the chip holds, so a chip set by
-  //      another tool (or before the timezone changed) holds UTC - indistinguishable from a correct time except by an
-  //      agreement test, which is the UTC step the RTC radio showed.
-  // When the system clock itself is unset there is nothing to agree WITH: offline with an RTC (the SD-offline case) the
-  // chip is the only source and is trusted, the year test above having already rejected a zeroed chip; online it is NOT
-  // trusted, because the agreement test needs a local zone and the timezone only arrives at the WiFi-connect event.
-  if (network.timeinfo.tm_year + 1900 <= 1901) return false;   // nothing has set it: year 1900, the zeroed struct
-  // Before the system clock is real, `localtime()` has no timezone to apply, so a chip holding UTC agrees with it
-  // perfectly - the UTC step above. Until then the chip is only trusted offline. "Real" needs a floor: before SNTP the
-  // clock is seconds since boot, a valid-looking positive time_t, so one year of epoch is the smallest honest floor.
+// Fills 'out' with the current local time and returns true only when the system clock is real. "Real" needs a floor:
+// before SNTP the clock is seconds since boot - a valid-looking positive time_t - so one year of epoch is the smallest
+// honest floor, and below it localtime() has no timezone to apply either. This is the one place that read happens:
+// clockTrustworthy() and refreshClock() both ask here instead of each calling time(NULL) and localtime_r().
+bool systemLocalTime(struct tm& out) {
   const time_t now = time(nullptr);
-  const bool sysClockSet = (now > 31536000);
-  if (!sysClockSet) return network.status == SDOFFLINE;
-  #if RTCSUPPORTED
-    if (config.isRTCFound()) {
-      struct tm sysTm;
-      if (!localtime_r(&now, &sysTm)) return false;
-      if (network.timeinfo.tm_year != sysTm.tm_year) return false;                  // a halted cell reads 2000
-      int dmin = (network.timeinfo.tm_hour * 60 + network.timeinfo.tm_min)
-               - (sysTm.tm_hour * 60 + sysTm.tm_min);
-      if (dmin >  720) dmin -= 1440;                                                // compare across midnight
-      if (dmin < -720) dmin += 1440;
-      if (dmin > 1 || dmin < -1) return false;                                      // the chip is in another zone
-    }
-  #endif
-  return true;
+  if (now <= 31536000) return false;  // seconds since boot, not a date
+  return localtime_r(&now, &out) != nullptr;
+}
+
+bool clockTrustworthy() {
+  // The clock may only print a time the device can stand behind.  network.timeinfo is now a pure cache filled by
+  // refreshClock(), so the only question left is whether it holds anything real:
+  //   1. Nothing has set it yet - a zeroed struct is year 1900, so 1901 or less IS the "never set" state and the
+  //      zeroed struct is its own marker; the no-RTC radio showed 00:00 here until the first doSync().
+  //   2. With the system clock unset there is nothing to check against, and localtime() has no timezone to apply
+  //      either (configTzTime() only runs at the WiFi-connect event).  Offline the RTC chip is the only source there
+  //      will ever be, so it is trusted; online it is not, because SNTP and doSync() have not spoken yet.
+  // No agreement test is needed any more: refreshClock() copies the system clock whenever it is set, so an RTC in
+  // another zone can no longer reach the glass; the chip only fills the cache while the system clock is unset, which
+  // is exactly the "nothing to agree with" case handled below.  The chip is kept honest by doSync()'s rtc.setTime().
+  if (network.timeinfo.tm_year + 1900 <= 1901) return false;   // nothing has set it: year 1900, the zeroed struct
+  struct tm sysTm;
+  if (systemLocalTime(sysTm)) return true;                     // the system clock is authoritative once set
+  return network.status == SDOFFLINE;                          // no system clock: trust the chip only offline
 }
 
 namespace {
@@ -80,8 +72,8 @@ void Utility::sleepCore() {
           rtc_gpio_pulldown_dis((gpio_num_t)i);
         }
       }
-      #if defined(ARDUINO_ESP32C3_DEV) || defined(ARDUINO_ESP32S3_DEV)
-        // S3/C3: native GPIO wake on LOW level (button PRESS, not release)
+      #if defined(ARDUINO_ESP32S3_DEV)
+        // S3: native GPIO wake on LOW level (button PRESS, not release)
         for (uint8_t i = 0; i < 40; i++) {
           if (mask & (1ULL << i)) {
             gpio_wakeup_enable((gpio_num_t)i, GPIO_INTR_LOW_LEVEL);
@@ -107,10 +99,58 @@ void Utility::sleepCore() {
   #endif
 }
 
+volatile uint8_t Utility::sleepWanted = 0;
+
+// Both of these are called from an esp_timer task, never from the main loop: `ticks()` is a Ticker callback
+// (`network.ctimer.attach(1, ticks)`) and so is the sleep timer that sleepForAfter() arms.  So they do the one thing that
+// is safe from any task - raise a flag - and the sleep itself happens in serviceSleep() below, on the main loop.
+void Utility::requestSleep()     { sleepWanted = 1; }  // sleep now, no wake timer
+void Utility::requestSleepWake() { sleepWanted = 2; }  // sleep, then wake after `sleepfor` minutes
+
+// Main loop: carry out a sleep that a timer, a button or the `sleep` command asked for.  Two phases, because the request
+// and the teardown used to happen in the same instant: display.putRequest(NEWMODE, SLEEPING) is queued to the display
+// task, while sleepCore() calls display.deepsleep() microseconds later - so the message was never painted, and the timer
+// paths never asked for one at all.  Phase A wakes a blanked panel, requests the message and arms SLEEP_MSG_HOLD; phase B
+// does the teardown once the hold has expired.  Deliberately non-blocking: the display task needs those seconds to draw,
+// and the audio task keeps feeding through them.
+void Utility::serviceSleep() {
+  static uint32_t sleepAtMs = 0;
+  static bool     holding   = false;
+  const uint8_t what = sleepWanted;
+  #ifndef DEEP_SLEEP_DISABLE
+    if (what && !holding && SLEEP_MSG_HOLD > 0) {
+      holding = true;
+      sleepAtMs = millis() + (uint32_t)SLEEP_MSG_HOLD * 1000UL;
+      // Silence first, so the message is noticed.
+      network.cancelStreamRetry();
+      player.sendCommand({PR_STOP, 0});
+      config.setDspOn(true);            // a blanked panel would swallow the message we are about to ask for
+      display.putRequest(NEWMODE, SLEEPING);
+      FUNCTIONLOG("SLEEP", "Sleeping in %u s", (unsigned)SLEEP_MSG_HOLD);
+      return;
+    }
+    if (holding && (int32_t)(millis() - sleepAtMs) < 0) return;   // signed: correct across the millis() wrap
+  #endif
+  if (!what && !holding) return;                       // nothing asked and nothing pending: the common case
+  sleepWanted = 0;
+  holding = false;
+  #ifndef DEEP_SLEEP_DISABLE
+    if (what == 2) doSleep(); else doSleepW();
+  #endif
+}
+
 void Utility::doSleep() {
   #ifndef DEEP_SLEEP_DISABLE
+    // 'sleepfor' is minutes: the wake timer takes microseconds, and the message says minutes.  It used to say
+    // "Will wake after %i minutes" with sleepfor * 60, i.e. five minutes printed as three hundred.
+    if (sleepfor > 0) FUNCTIONLOG("SLEEP", "Sleeping now.  Will wake after %i minutes.", (int)sleepfor);
+    else              FUNCTIONLOG("SLEEP", "Sleeping now.");
+    Serial.flush();  // esp_deep_sleep_start() does not wait for the UART to drain, and this line is the record
+    delay(50);
     sleepCore();
-    if (sleepfor > 0) esp_sleep_enable_timer_wakeup(sleepfor * 60 * 1000000ULL);
+    if (sleepfor > 0) {
+      esp_sleep_enable_timer_wakeup(sleepfor * 60 * 1000000ULL);
+    }
     esp_deep_sleep_start();
   #endif
 }
@@ -407,10 +447,19 @@ void Utility::indexPlaylist() {
   char stationUrl[STATION_FIELD_LENGTH] = {0};
   int stationOvol = 0;
   File index = LittleFS.open(INDEX_PATH, "w");
+  uint32_t entries = 0;
   while (playlist.available()) {
     uint32_t pos = playlist.position();
     if (parseCSV(playlist.readStringUntil('\n').c_str(), stationName, stationUrl, stationOvol)) {
+      // Stop READING at the ceiling: a row past MAX_PLAYLIST_ENTRIES can never be given an id. Breaking here
+      // rather than skipping keeps the index contiguous and stops the parse of a hopeless file.
+      if (entries >= MAX_PLAYLIST_ENTRIES) {
+        WARNINGLOG("playlist.csv has more than %u stations: the rest are not indexed and cannot be played",
+                   (unsigned)MAX_PLAYLIST_ENTRIES);
+        break;
+      }
       index.write((uint8_t*)&pos, 4);
+      entries++;
     }
   }
   index.close();
@@ -443,6 +492,12 @@ void Utility::initPlaylist() {
   if (idx) { idxSize = idx.size(); idx.close(); }
   FUNCTIONLOG("Playlist", "initPlaylist: %u bytes of playlist.csv, %u index entries (%u bytes)",
               (unsigned)csvSize, (unsigned)(idxSize / 4), (unsigned)idxSize);
+  // The index that was just built is the authoritative count for PM_WEB, and it is the width the big number is
+  // zero-filled to: the display task may not open the index, so the store carries the figure.  Clamped the same
+  // way playlistLength() clamps, or a full file would wrap to zero here.
+  uint32_t entries = (uint32_t)(idxSize / 4);
+  if (entries > MAX_PLAYLIST_ENTRIES) entries = MAX_PLAYLIST_ENTRIES;
+  config.setCountStation((uint16_t)entries);
 }
 
 bool Utility::cleanPlaylist() {
@@ -543,12 +598,20 @@ uint16_t Utility::playlistLength() {
     File index = config.SDPLFS()->open(REAL_INDEX, "r");
     size_t sz = index.size();
     // SD index has an 8-byte footer: [magic:4][count:4]
-    if (config.getMode() == PM_SDCARD) {
-      out = (sz >= 8) ? ((sz - 8) / 4) : 0;
-    } else {
-      out = sz / 4;
-    }
+    size_t rows = (config.getMode() == PM_SDCARD) ? ((sz >= 8) ? ((sz - 8) / 4) : 0) : (sz / 4);
     index.close();
+    // This narrowing is where a full card used to become an empty one: 65536 rows truncate to 0, and every consumer then sees an
+    // empty playlist.  Clamping here is the one chokepoint no future writer can defeat. See MAX_PLAYLIST_ENTRIES in config.h.
+    if (rows > MAX_PLAYLIST_ENTRIES) {
+      static bool warned = false;
+      if (!warned) {
+        warned = true;
+        WARNINGLOG("playlist index holds %u entries; only the first %u have ids and can be played",
+                   (unsigned)rows, (unsigned)MAX_PLAYLIST_ENTRIES);
+      }
+      rows = MAX_PLAYLIST_ENTRIES;
+    }
+    out = (uint16_t)rows;
   }
   return out;
 }
@@ -668,6 +731,9 @@ char* Utility::stationByNum(uint16_t num) {
 
 void Utility::doSleepW() {
   #ifndef DEEP_SLEEP_DISABLE
+    FUNCTIONLOG("SLEEP", "Sleeping now.");
+    Serial.flush();  // esp_deep_sleep_start() does not wait for the UART to drain
+    delay(50);
     sleepCore();
     esp_deep_sleep_start();
   #endif
@@ -676,9 +742,9 @@ void Utility::doSleepW() {
 void Utility::sleepForAfter(uint16_t sleepfor, uint16_t sa) {
   Utility::sleepfor = sleepfor;
   if (sa > 0) {
-    sleepTimer.attach(sa * 60, Utility::doSleep);
+    sleepTimer.attach(sa * 60, Utility::requestSleepWake);  // the callback only raises the flag; serviceSleep() sleeps
   } else {
-    Utility::doSleep();
+    Utility::doSleep();  // already on the main loop, so sleep here and now
   }
 }
 
@@ -779,8 +845,8 @@ void Utility::pruneLittleFS() {
 
   // As with verifyLittleFS, the root listing only yields directory entries under LittleFS, so
   // the two directories are walked explicitly. Directory entries themselves are never removed.
-  // Keep this list closed to these two: /logs (the log ring, see logging.h) is root-level on purpose, and a sweep
-  // widened to the root would delete the very log someone is trying to read.
+  // Keep this list closed to these two: the config and playlist files live at the root, and a sweep widened to it
+  // would delete them.
   static const char* const dirs[] = {"/www", "/data"};
   for (const char* dir : dirs) {
     File root = LittleFS.open(dir);

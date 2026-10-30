@@ -1,4 +1,5 @@
 #include "core/options.h"
+#include "core/coredump.h"
 #include <Arduino.h>
 #include <DNSServer.h>
 #include <esp_system.h>
@@ -16,6 +17,7 @@
 #include "core/player.h"
 #include "core/rgbled.h"
 #include "core/sdmanager.h"
+#include "core/utility.h"   // Utility::serviceSleep(): the main loop performs a sleep a Ticker asked for
 #ifdef USE_SD
   #include "core/filemanager.h"   // SD card file manager: /sdman and its mode
 #endif
@@ -25,6 +27,9 @@
 #include "displays/tools/dspstats.h"
 
 SET_LOOP_TASK_STACK_SIZE(LOOP_TASK_STACK_SIZE * 1024);
+
+// ms an iteration of loop() may take before it reports which stage blocked (moved out of options.h).
+static constexpr uint32_t MAIN_LOOP_STALL_MS = 500;
 
 size_t psramFrameBufferBytes = 0;   // set by subsystems, read by Core Monitor
 
@@ -44,16 +49,20 @@ void setup() {
     Serial.setTxBufferSize(4096); // activate ring-buffer
   #endif
   Serial.begin(115200);
-  #if (CORE_DEBUG_LEVEL > 0) || defined(ALL_DEBUG_LOGS)
-    // A crash needs the same wait as a cold boot: after a panic esp_reset_reason() is not ESP_RST_POWERON, so
-    // without this the summary would print before the host terminal attached.  A crash reports on the NEXT boot.
+  {
     const bool dumpedCrash = crashDumpAvailable();
-    if (dumpedCrash || esp_reset_reason() == ESP_RST_POWERON || esp_reset_reason() == ESP_RST_EXT) { // poweron boot or a crash
-      delay(1000);
-      BOOTLOG("1 second delay after cold boot to ensure serial logs are available (CORE_DEBUG_LEVEL > 0 or ALL_DEBUG_LOGS)...");
-    }
-    if (dumpedCrash) crashDumpReport();   // the previous boot's crash: serial log and log ring both get it
-  #endif
+    #if (CORE_DEBUG_LEVEL > 0) || defined(ALL_DEBUG_LOGS)
+      if (dumpedCrash || esp_reset_reason() == ESP_RST_POWERON || esp_reset_reason() == ESP_RST_EXT) {
+        delay(1000);
+        BOOTLOG("1 second delay after cold boot to ensure serial logs are available (CORE_DEBUG_LEVEL > 0 or ALL_DEBUG_LOGS)...");
+      }
+    #else
+      // And a del
+      BOOTLOG("1 second delay after cold boot to ensure crash log is available...");
+      if (dumpedCrash) delay(1000);
+    #endif
+    if (dumpedCrash) crashDumpReport();   // the previous boot's crash, reported into this boot's serial log
+  }
   #if defined(ARDUINO_USB_CDC_ON_BOOT) && ARDUINO_USB_CDC_ON_BOOT
     Serial.setTxTimeoutMs(BOOTLOG_TX_TIMEOUT_MS);
   #endif
@@ -64,16 +73,17 @@ void setup() {
   battery.init();
   BOOTTIMELOG("serial & deassert & rgbled & battery");
   config.init();
-  controls.checkButtonsHeldOnBoot();  // check for hold-to-SD before network decision
+  controls.checkButtonsHeldOnBoot(); // check for hold-to-SD before network decision
   backlightControls.init();
   BOOTTIMELOG("config.init & controls & backlight");
   display.init();
   BOOTTIMELOG("display.init");
   const bool offlineBoot = (network.offlineMode || config.store.SDoffline);
-  startup.checkLittleFSandVer();
-  BOOTTIMELOG("checkLittleFSandVer");
   player.init();
   BOOTTIMELOG("player.init");
+  display.putRequest(BOOTVERSION); // follows player.init because of "VS1053" message
+  startup.checkLittleFSandVer();
+  BOOTTIMELOG("checkLittleFSandVer");
   battery.bootStatus();
   BOOTTIMELOG("battery.bootStatus");
   if (offlineBoot) {
@@ -193,17 +203,15 @@ void loop() {
       static const char* const stageNames[5] = {"net/telnet", "rgbled+battery", "controls", "player+saves", "startup"};
       uint8_t worst = 0;
       for (uint8_t i = 1; i < 5; i++) if (staged[i] > staged[worst]) worst = i;
-      ERRORLOG("Main loop stalled %lums, worst stage %s %lums - net %lu, hw %lu, ctl %lu, player %lu, startup %lu",
+      WARNINGLOG("Main loop stalled %lums, worst stage %s %lums - net %lu, hw %lu, ctl %lu, player %lu, startup %lu",
           (unsigned long)(total / 1000UL), stageNames[worst], (unsigned long)(staged[worst] / 1000UL),
           (unsigned long)(staged[0] / 1000UL), (unsigned long)(staged[1] / 1000UL),
           (unsigned long)(staged[2] / 1000UL), (unsigned long)(staged[3] / 1000UL),
           (unsigned long)(staged[4] / 1000UL));
     }
-}
+  }
 
-logRingFlush(); // drain log ring
-
-#ifdef CORE_MONITOR
+  #ifdef CORE_MONITOR
     cmMainCount++;
     uint32_t cmDur = micros() - cmLoopStart;
     if (cmDur > cmMaxMainLoop) cmMaxMainLoop = cmDur;
@@ -240,13 +248,46 @@ logRingFlush(); // drain log ring
           (unsigned)(dspTaskHandle ? uxTaskGetStackHighWaterMark(dspTaskHandle) : 0),
           (unsigned)(nsTaskHandle  ? uxTaskGetStackHighWaterMark(nsTaskHandle)  : 0));
       // LittleFS + PSRAM info — rate-limited by CORE_MONITOR_ETC_LOOPS
+      // Integrity every cycle, not every fifth: the TLSF assertion that fires inside block_locate_free trips within
+      // seconds of a corruption appearing, so a 25 s window usually misses it.  LittleFS and PSRAM detail stays
+      // rate-limited.
+      const bool heapInternalOk = heap_caps_check_integrity(MALLOC_CAP_INTERNAL, true);
+      const bool heapPsramOk = !psramFound() || heap_caps_check_integrity(MALLOC_CAP_SPIRAM, true);
+      const char* heapVerdict =
+            (heapInternalOk && heapPsramOk)  ? " | heap ok"
+          : (!heapInternalOk && !heapPsramOk) ? " | heap CORRUPT (internal+PSRAM)"
+          : !heapInternalOk                   ? " | heap CORRUPT (internal)"
+                                              : " | heap CORRUPT (PSRAM)";
+      // Internal DRAM that can serve a byte: MALLOC_CAP_DEFAULT also matches PSRAM (it reported 7.9 MB), plain INTERNAL
+      // also matches IRAM, which is 32-bit only - so neither reports the heap wifi_malloc allocates from.
+      const uint32_t internal8 = MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT;
+      FUNCTIONLOG("Heap", "8bit: %uKB free, %uKB largest | PSRAM: %uKB free, %uKB largest%s",
+          heap_caps_get_free_size(internal8) / 1024,
+          heap_caps_get_largest_free_block(internal8) / 1024,
+          heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024,
+          heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM) / 1024,
+          heapVerdict);
+      if (!heapInternalOk || !heapPsramOk) {
+        // One ERROR per boot, plus a note that outlives the panic: the archive prints it above the crashdump text, so
+        // the record says the heap was already broken before the allocation that tripped over it.
+        static bool heapErrorLogged = false;
+        if (!heapErrorLogged) {
+          heapErrorLogged = true;
+          ERRORLOG("heap corruption detected %lus after boot: internal %s, PSRAM %s",
+                   (unsigned long)(millis() / 1000UL),
+                   heapInternalOk ? "ok" : "CORRUPT", heapPsramOk ? "ok" : "CORRUPT");
+        }
+        char heapNote[160];
+        snprintf(heapNote, sizeof(heapNote), "8bit free %uKB largest %uKB, internal %s, PSRAM %s, uptime %lus",
+                 (unsigned)heap_caps_get_free_size(internal8) / 1024,
+                 (unsigned)heap_caps_get_largest_free_block(internal8) / 1024,
+                 heapInternalOk ? "ok" : "CORRUPT", heapPsramOk ? "ok" : "CORRUPT",
+                 (unsigned long)(millis() / 1000UL));
+        coredump::noteHeapCorruption(heapNote);
+      }
       if (++cmEtcCount >= CORE_MONITOR_ETC_LOOPS) {
         cmEtcCount = 0;
         FUNCTIONLOG("LittleFS", "Used: %u / %u bytes, Free: %u bytes", LittleFS.usedBytes(), LittleFS.totalBytes(), LittleFS.totalBytes() - LittleFS.usedBytes());
-        // Internal free and the largest CONTIGUOUS block - the figure a TLS handshake actually needs
-        FUNCTIONLOG("Heap", "Internal: %uKB free, %uKB largest block",
-            ESP.getFreeHeap() / 1024,
-            heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL) / 1024);
         if (psramFound()) {
           size_t psramTotal = ESP.getPsramSize();
           size_t psramUsed  = psramTotal - ESP.getFreePsram();
@@ -269,6 +310,12 @@ logRingFlush(); // drain log ring
   #ifdef USE_SD
     filemanager.loop();
   #endif
+
+  /* A sleep the timers asked for is performed HERE, on the main loop.  Both requesters (the sleep timer in ticks() and
+     the Ticker armed by sleepForAfter()) are esp_timer callbacks, and display.deepsleep() plus a telnet-capable log line
+     do not belong on that task. */
+  utility.serviceSleep();
+  coredump::service();   // black box: archive the previous boot's crash once the clock can date it
 }
 
 

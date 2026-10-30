@@ -6,9 +6,13 @@
 #include <ESPFileUpdater.h>
 #include <ESPmDNS.h>
 #include <esp_attr.h>
+#include <esp_heap_caps.h>
 #include <ImprovWiFiLibrary.h>
 #include "config.h"
 #include "display.h"
+#ifdef USE_SD
+  #include "filemanager.h"
+#endif
 #include "logging.h"
 #include "mqtt.h"
 #include "netserver.h"
@@ -21,12 +25,43 @@
 #include "utility.h"
 #include "../locale/dsplocale.h"
 
+// The weather has TWO questions, and the layout editor's switch answers both.  `weatherWanted()` opens the
+// FETCH gates, which round 3 deliberately left closed - a layout can only be positioned against a real line,
+// so with the switch on the device fetches rather than showing a stand-in.  `weatherDetail()` pretends the
+// four display switches are on, so the line is the longest one any layout could show.  Neither touches
+// config.store, and display.cpp's `weatherLive()` is the sibling that decides VISIBILITY.
+static inline bool weatherWanted() { return editorOpt(config.store.showweather); }
+static inline bool weatherDetail(bool stored) { return editorOpt(stored); }
+
+// Bytes: ESP-IDF counts the stack depth in bytes (StackType_t is uint8_t), so KB * 1024 is exactly what
+// xTaskCreate wants and the name is honest.
 #define NETWORK_TASK_STACK_BYTES (NETWORK_TASK_STACK_SIZE * 1024)
+
+static constexpr uint32_t WIFI_SETTLE_MS               = 1000;   // ms after the stack starts before connecting
+static constexpr uint32_t WIFI_SCAN_DWELL_MS           = 120;    // ms per channel; too short fails, falls back to 300
+static constexpr uint32_t WIFI_CONNECT_POLL_MS         = 100;    // connect-loop status poll
+static constexpr uint32_t WIFI_RETRY_SCALE             = 2;      // second attempt window = WIFI_ATTEMPTS * 500 ms * this
+static constexpr uint32_t WIFI_FAST_ATTEMPTS           = 4;      // ~2 s: directed reconnect to a known BSSID before a scan
+static constexpr uint32_t STREAM_RETRY_SLOW_S          = 60;     // s between retries once the fast budget is spent
+static constexpr uint32_t STREAM_RETRY_RESPAWN_MS      = 5000;   // ms a resume may stay owed before ticks() starts a task
+static constexpr uint32_t WIFI_RECONN_RESPAWN_MS       = 5000;   // ms between retries of a failed wifiReconn spawn
+static constexpr uint8_t  WIFI_RECONN_SPAWN_FAIL_MAX   = 2;      // failed retries before a recovery restart
+static constexpr uint8_t  STREAM_RESET_MAX             = 3;      // link resets allowed in one outage before restart
+static constexpr uint8_t  RECOVERY_REBOOT_MAX          = 2;      // consecutive recovery restarts before patient retries
+static constexpr uint32_t RECOVERY_HEALTHY_MS          = 600000; // ms of playback that clears the restart count
+static constexpr uint32_t NET_REFUSAL_MS               = 700;    // a failed connect faster than this was refused
+static constexpr uint32_t NETHEALTH_TIMEOUT_MS         = 700;    // ms the stack probe waits for the internet TCP connect
+static constexpr uint32_t NETHEALTH_GATEWAY_TIMEOUT_MS = 400;    // ms per gateway port probe (a LAN connect is tens of ms)
+
+// Router ports probed to tell a WAN outage from a wedged stack.  A router's UI or DNS is frequently
+// not on 80, and a wrong guess reads as "gateway silent" - a false wedged verdict.
+static const uint16_t kGatewayProbePorts[] = { 80, 53, 443, 8080 };
 
 MyNetwork network;
 
 TaskHandle_t syncTaskHandle;
 TaskHandle_t streamRetryTaskHandle = NULL;
+static TaskHandle_t wifiReconnTaskHandle = NULL;
 static uint8_t streamResetsUsed = 0;
 
 // Recovery restarts, counted in RTC memory: it survives esp_restart(), which is the whole point, and a power
@@ -50,7 +85,7 @@ static void recoveryReboot(const char* why) {
     static uint32_t lastRefusedMs = 0;
     if (lastRefusedMs == 0 || (millis() - lastRefusedMs) >= 300000UL) {
       lastRefusedMs = millis() ? millis() : 1;
-      ERRORLOG("Recovery restarts spent (%u, %s) - retrying patiently instead of restarting again",
+      WARNINGLOG("Recovery restarts spent (%u, %s) - retrying patiently instead of restarting again",
           (unsigned)recoveryReboots, why);
     }
     return;
@@ -115,6 +150,50 @@ bool spawnStreamRetry() {
   return ok == pdPASS;
 }
 
+// The only place the Wi-Fi reconnect task is created: the disconnect event and the self-heal in ticks() both
+// come through here, so two callers cannot win the race and leave a stray task with the handle already cleared.
+static bool spawnWifiReconnect() {
+  static portMUX_TYPE spawnMux = portMUX_INITIALIZER_UNLOCKED;
+  static volatile bool spawnPending = false;
+  portENTER_CRITICAL(&spawnMux);
+  const bool taken = (wifiReconnTaskHandle != NULL) || spawnPending;
+  if (!taken) spawnPending = true;
+  portEXIT_CRITICAL(&spawnMux);
+  if (taken) return false;   // already running, or a create is in flight
+
+  const BaseType_t ok = xTaskCreatePinnedToCore(wifiReconnectionTask, "wifiReconn", NETWORK_TASK_STACK_BYTES, NULL, NET_TASK_PRIORITY, &wifiReconnTaskHandle, NETWORK_CORE);
+
+  portENTER_CRITICAL(&spawnMux);
+  spawnPending = false;
+  if (ok != pdPASS) wifiReconnTaskHandle = NULL;   // leave it NULL so the self-heal can try again
+  portEXIT_CRITICAL(&spawnMux);
+  return ok == pdPASS;
+}
+
+// The one place network.timeinfo is made current, and the only place ticks() queues CLOCK.  timeinfo is a pure cache
+// of the most reliable clock available, refreshed every tick and never advanced by hand - the authority order is:
+//   1. the system clock, once SNTP has set it.  It is disciplined and keeps running across a WiFi outage too, so it is
+//      read regardless of network.status (the old code switched to a hand-incremented copy the moment the link
+//      dropped, which is exactly the drift the display used to bounce on);
+//   2. otherwise the RTC chip, when one is present - the only source across an offline boot;
+//   3. otherwise nothing, leaving timeinfo as it is.  The old tm_sec++/mktime() increment is gone: with no source it
+//      only ever advanced a struct there was nothing to show (clockTrustworthy() gates the print anyway).
+static void refreshClock() {
+  struct tm localNow;
+  if (systemLocalTime(localNow)) {          // system clock set - it wins, whatever the network state
+    network.timeinfo = localNow;
+    display.putRequest(CLOCK);
+    return;
+  }
+  #if RTCSUPPORTED
+    if (config.isRTCFound()) {              // no system clock: the chip is the only source there is
+      rtc.getTime(&network.timeinfo);
+      mktime(&network.timeinfo);
+      display.putRequest(CLOCK);
+    }
+  #endif
+}
+
 void ticks() {
   if (!display.ready()) return; //waiting for SD is ready
   // Self-heal the ladder.  lostPlaying is the IOU ("the user is owed a resume"): it is set BEFORE the task is
@@ -142,6 +221,25 @@ void ticks() {
       }
     }
   }
+  // Self-heal the Wi-Fi reconnect task the same way.  forceLinkReset() drops the link while the old stream
+  // task's stack is still held, so the create in WiFiLostConnection() can fail; beginReconnect then stays true
+  // with the radio off.  Retrying here gives that stack time to be freed; a heap that never clears restarts.
+  if (network.beginReconnect && network.status != SOFT_AP && !network.offlineMode &&
+      WiFi.status() != WL_CONNECTED && wifiReconnTaskHandle == NULL) {
+    static uint32_t lastWifiRespawnMs = 0;
+    static uint8_t wifiSpawnFailures = 0;
+    if (lastWifiRespawnMs == 0 || (millis() - lastWifiRespawnMs) >= WIFI_RECONN_RESPAWN_MS) {
+      lastWifiRespawnMs = millis() ? millis() : 1;
+      if (spawnWifiReconnect()) {
+        if (wifiSpawnFailures) FUNCTIONLOG("Network", "wifi reconnect task running again after %u failed start(s)", (unsigned)wifiSpawnFailures);
+        wifiSpawnFailures = 0;
+      } else if (++wifiSpawnFailures >= WIFI_RECONN_SPAWN_FAIL_MAX) {
+        if (wifiSpawnFailures == WIFI_RECONN_SPAWN_FAIL_MAX) FUNCTIONLOG("Network", "wifi reconnect task will not start - escalating to a recovery restart");
+        recoveryReboot("wifi reconnect task could not be spawned");
+        wifiSpawnFailures = 0;
+      }
+    }
+  }
   // An outage that ends earns the escalation back.  Without this the restarts would be spent for the life of
   // the boot and a wedge a week later would have no rung left; an outage that never ends keeps its count.
   {
@@ -164,19 +262,9 @@ void ticks() {
   weatherSyncTicks++;
   divrssi = !divrssi;
   if (network.status == CONNECTED) {
-    if (config.store.ehdp) ehdp.loop();
+    if (config.store.ehdp && netserver.isListening()) ehdp.loop();
     if (network.forceTimeSync || network.forceWeather) {
       xTaskCreatePinnedToCore(doSync, "doSync", NETWORK_TASK_STACK_BYTES, NULL, LOW_TASK_PRIORITY, &syncTaskHandle, NETWORK_CORE);
-    }
-    // check at :01s mark (fix network clock not matching system clock after Daylight Savings Time changes)
-    if (network.timeinfo.tm_sec == 1) {
-      time_t now = time(NULL);
-      struct tm localNow;
-      localtime_r(&now, &localNow);
-      if ((network.timeinfo.tm_min != localNow.tm_min) || (network.timeinfo.tm_hour != localNow.tm_hour)) {
-        timeSyncTicks = 0;
-        network.forceTimeSync = true;
-      }
     }
     // Time sync interval: config value is in hours, convert to seconds
     uint32_t timeSyncInterval = (uint32_t)config.store.timesyncinterval * 3600;
@@ -185,15 +273,20 @@ void ticks() {
       network.forceTimeSync = true;
     }
     uint16_t weatherSyncInterval = (uint16_t)config.store.weathersyncinterval * 60;
-    if (config.store.showweather && weatherSyncTicks >= weatherSyncInterval) {
+    if (weatherWanted() && weatherSyncTicks >= weatherSyncInterval) {
       weatherSyncTicks=0;
       network.forceWeather = true;
     }
   }
   bool connectingStream = display.mode()==PLAYER && !player.isRunning() && strcmp_P(config.station.title, l10n(L10N_MSG_CONNECT)) == 0;
-  if (connectingStream) {
-    config.screensaverTicks = 0;
-    config.screensaverPlayingTicks = 0;
+  #ifdef USE_SD
+    const bool fileManagerActive = filemanager.active();
+  #else
+    const bool fileManagerActive = false;
+  #endif
+  // The SD File Manager holds the screen and has its own idle timeout; hold the countdowns while it is open
+  if (fileManagerActive || connectingStream) {
+    config.resetScreensaverTimers(0);
   } else {
     if (config.store.screensaverEnabled && display.mode()==PLAYER && !player.isRunning()) {
       config.screensaverTicks++;
@@ -215,20 +308,14 @@ void ticks() {
         }
       }
     }
+    #ifndef DEEP_SLEEP_DISABLE
+      if (config.store.sleeptimer && (display.mode()==PLAYER || config.isScreensaver)) {
+        if (config.sleepTicks < 0xFFFF) config.sleepTicks++;
+        if (config.sleepTicks > (uint32_t)config.store.sleepSsTimeout * 60 + SCREENSAVERSTARTUPDELAY) utility.requestSleep();
+      }
+    #endif
   }
-  #if RTCSUPPORTED
-    if (config.isRTCFound()) {
-      rtc.getTime(&network.timeinfo);
-      mktime(&network.timeinfo);
-      display.putRequest(CLOCK);
-    }
-  #else
-    if (network.timeinfo.tm_year>100 || network.status == SDOFFLINE) {
-      network.timeinfo.tm_sec++;
-      mktime(&network.timeinfo);
-      display.putRequest(CLOCK);
-    }
-  #endif //#if RTCSUPPORTED
+  refreshClock();
   if (player.isRunning() && config.getMode()==PM_SDCARD) {
     if (network.status == SDOFFLINE) player.getAudioCurrentTime();  // bypass netserver (not running in offline mode)
     else netserver.requestOnChange(SDPOS, 0);
@@ -276,6 +363,13 @@ static uint32_t streamRetryWaitMs(uint16_t attempt) {
   return (uint32_t)STREAM_RETRY_SLOW_S * 1000UL;   // then the slow, indefinite tail
 }
 
+// Can a TLS session be paid for right now?  mbedTLS wants ~34-36 KB in ONE block (16 KB in + 16 KB out +
+// context, the figure ESPFileUpdater's own ESPFILEUPDATER_MIN_HEAP_FOR_SSL is built on), and a fragmented heap can
+// have 24 KB free with nothing bigger than 2 KB in it. Total free bytes cannot answer this question.
+bool heapCanAffordTls(size_t bytes) {
+  return heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT) >= bytes;
+}
+
 // Probe verdicts: only WEDGED resets the link, everything else means leave it alone
 enum netVerdict_e : uint8_t { NET_STACK_OK, NET_STACK_WEDGED, NET_LINK_DOWN };
 
@@ -297,15 +391,23 @@ static netVerdict_e probeNetworkStack() {
   const uint32_t gwIp = (uint32_t)WiFi.gatewayIP();
   bool gwOk = false;
   uint32_t gwMs = 0;
+  uint16_t gwPort = 0;
   if (gwIp) {
-    WiFiClient lan;
     const uint32_t t0 = millis();
-    gwOk = lan.connect(IPAddress(gwIp), NETHEALTH_GATEWAY_PORT, NETHEALTH_GATEWAY_TIMEOUT_MS);
+    for (uint8_t i = 0; i < (uint8_t)(sizeof(kGatewayProbePorts) / sizeof(kGatewayProbePorts[0])); i++) {
+      WiFiClient lan;
+      if (lan.connect(IPAddress(gwIp), kGatewayProbePorts[i], NETHEALTH_GATEWAY_TIMEOUT_MS)) {
+        gwOk = true;
+        gwPort = kGatewayProbePorts[i];
+        lan.stop();
+        break;
+      }
+      lan.stop();
+    }
     gwMs = millis() - t0;
-    lan.stop();
   }
   if (gwOk) {
-    FUNCTIONLOG("Network", "stack probe: gateway ok %lums - our stack can connect", (unsigned long)gwMs);
+    FUNCTIONLOG("Network", "stack probe: gateway ok on port %u, %lums - our stack can connect", (unsigned)gwPort, (unsigned long)gwMs);
     return NET_STACK_OK;
   }
 
@@ -319,6 +421,18 @@ static netVerdict_e probeNetworkStack() {
       gwIp ? "FAIL" : "unknown", (unsigned long)gwMs, netOk ? "ok" : "FAIL", (unsigned long)netMs);
 
   return netOk ? NET_STACK_OK : NET_STACK_WEDGED;
+}
+
+// A user-initiated play whose connect failed: the failure may be the wedge (the driver says connected while
+// nothing can connect) rather than a dead station.  Only WEDGED acts, and it enters the ladder at rung 1 - the
+// reset drops the link, GOT_IP restarts retryStreamConnection(), and that spends 2/3 and 3/3 as usual.
+void MyNetwork::noteConnectFailure(const char* url) {
+  if (network.lostPlaying || network.beginReconnect || network.offlineMode) return;  // the ladder or the link owns it
+  if (WiFi.status() != WL_CONNECTED) return;                                        // no link to test
+  if (probeNetworkStack() != NET_STACK_WEDGED) return;                              // host refused; leave it alone
+  if (url && url[0] != '\0') config.saveLastStationUrl(url);  // resume the station that failed, not the previous one
+  network.lostPlaying = true;            // owe the resume to the station that just failed
+  forceLinkReset("play connect failed");
 }
 
 void retryStreamConnection(void * pvParameters) {
@@ -438,9 +552,8 @@ void MyNetwork::WiFiLostConnection(WiFiEvent_t event, WiFiEventInfo_t info) {
     startup.deferBootStable("wifi lost");
     // Spawn background task to run the full scan-best + sequential fallback strategy
     // instead of just retrying the same AP via WiFi.reconnect()
-    if (xTaskCreatePinnedToCore(wifiReconnectionTask, "wifiReconn", NETWORK_TASK_STACK_BYTES, NULL, NET_TASK_PRIORITY, NULL, NETWORK_CORE) != pdPASS) {
-      // No stream-ladder style retry exists for this one: the AP is only re-found on the next disconnect event,
-      // so a failed create has to be visible rather than silent.
+    if (!spawnWifiReconnect()) {
+      // Visible here; ticks() retries the create and escalates if the heap never allows it.
       ERRORLOG("wifiReconn task could not be created (%u bytes, free heap %u)", (unsigned)NETWORK_TASK_STACK_BYTES, (unsigned)ESP.getFreeHeap());
     }
   }
@@ -760,12 +873,14 @@ void wifiReconnectionTask(void * pvParameters) {
     FUNCTIONLOG("Network", "WiFi.reconnect: no known networks available, retrying in %u s", (unsigned)waitS);
     for (uint16_t i = 0; i < waitS; i++) {
       if (!network.beginReconnect || network.status == SOFT_AP) {
+        wifiReconnTaskHandle = NULL;
         vTaskDelete(NULL);
         return;
       }
       delay(1000);
     }
   }
+  wifiReconnTaskHandle = NULL;
   vTaskDelete(NULL);
 }
 
@@ -778,8 +893,6 @@ void MyNetwork::begin() {
     improv = new ImprovWiFi(&Serial);
     #if defined(CONFIG_IDF_TARGET_ESP32S3)
       ImprovTypes::ChipFamily chip = ImprovTypes::ChipFamily::CF_ESP32_S3;
-    #elif defined(CONFIG_IDF_TARGET_ESP32C3)
-      ImprovTypes::ChipFamily chip = ImprovTypes::ChipFamily::CF_ESP32_C3;
     #else
       ImprovTypes::ChipFamily chip = ImprovTypes::ChipFamily::CF_ESP32;
     #endif
@@ -860,11 +973,9 @@ static bool onImprovCustomConnect(const char* ssid, const char* password) {
     snprintf(deviceUrl, sizeof(deviceUrl), "http://%d.%d.%d.%d/", ip[0], ip[1], ip[2], ip[3]);
     #if defined(CONFIG_IDF_TARGET_ESP32S3)
       ImprovTypes::ChipFamily chip = ImprovTypes::ChipFamily::CF_ESP32_S3;
-    #elif defined(CONFIG_IDF_TARGET_ESP32C3)
-      ImprovTypes::ChipFamily chip = ImprovTypes::ChipFamily::CF_ESP32_C3;
     #else
-    ImprovTypes::ChipFamily chip = ImprovTypes::ChipFamily::CF_ESP32;
-  #endif
+      ImprovTypes::ChipFamily chip = ImprovTypes::ChipFamily::CF_ESP32;
+    #endif
     if (network.improv) network.improv->setDeviceInfo(chip, "ehRadio", RADIOVERSION, "ehRadio", deviceUrl);
 
     improvRebootTicker.once(3, triggerImprovReboot);
@@ -966,7 +1077,7 @@ void doSync(void * pvParameters) {
       }
     }
   }
-  if (network.weatherBuf && config.store.showweather && network.forceWeather) {
+  if (network.weatherBuf && weatherWanted() && network.forceWeather) {
     // Fetch weather without interrupting display (keep showing cached data)
     network.forceWeather = false;
     if (!getWeather(network.weatherBuf) && shouldClearWeatherCacheOnFailure()) {
@@ -1061,7 +1172,8 @@ bool MyNetwork::buildWeatherString() {
   #if (DSP_MODEL!=DSP_DUMMY)
     if (!weatherBuf) return false;
 
-    // If no cached data or cache expired, show loading message
+    // No cached data, or the cache has expired: the loading line, which the fetch already on its way will
+    // replace.  There is deliberately no sample string - a layout is positioned against real weather now.
     if (!WeatherCache::valid) {
       snprintf(weatherBuf, WEATHER_STRING_L, "%s", l10n(L10N_LBL_W_LOADING));
       display.putRequest(NEWWEATHER);
@@ -1107,19 +1219,21 @@ bool MyNetwork::buildWeatherString() {
     written = snprintf(p, remaining, "%s, %.1f%s", desc, temp_display, tempUnit);
     if (written > 0 && (size_t)written < remaining) { p += written; remaining -= written; }
     
-    if (config.store.weatherfeels && remaining > 1) {
+    // The four detail switches, each through the one helper, so the editor's switch can present the longest
+    // line a layout could ever show without writing config.store.
+    if (weatherDetail(config.store.weatherfeels) && remaining > 1) {
       written = snprintf(p, remaining, " ~ %s %.1f%s", l10n(L10N_LBL_W_FEELSLIKE), feels_display, tempUnit);
       if (written > 0 && (size_t)written < remaining) { p += written; remaining -= written; }
     }
-    if (config.store.weatherpressure && remaining > 1) {
+    if (weatherDetail(config.store.weatherpressure) && remaining > 1) {
       written = snprintf(p, remaining, " ~ %s %.0f %s", l10n(L10N_LBL_W_PRESSURE), press_display, pressUnit);
       if (written > 0 && (size_t)written < remaining) { p += written; remaining -= written; }
     }
-    if (config.store.weatherhumidity && remaining > 1) {
+    if (weatherDetail(config.store.weatherhumidity) && remaining > 1) {
       written = snprintf(p, remaining, " ~ %s %d%%", l10n(L10N_LBL_W_HUMIDITY), WeatherCache::humidity);
       if (written > 0 && (size_t)written < remaining) { p += written; remaining -= written; }
     }
-    if (config.store.weatherwind && remaining > 1) {
+    if (weatherDetail(config.store.weatherwind) && remaining > 1) {
       written = snprintf(p, remaining, " ~ %s %.1f %s [%s]", l10n(L10N_LBL_W_WIND), wind_display, windUnit, l10n_wind(wind_dir_idx));
       if (written > 0 && (size_t)written < remaining) { p += written; remaining -= (size_t)written; }
     }

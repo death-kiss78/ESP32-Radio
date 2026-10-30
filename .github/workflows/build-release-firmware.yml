@@ -8,7 +8,7 @@ on:
     inputs:
       version:
         description: 'Release version (e.g., 2026.03.22)'
-        required: false
+        required: true
         type: string
 
 env:
@@ -64,6 +64,25 @@ jobs:
         with:
           python-version: '3.x'
 
+      - name: Verify builds/releases/ is up-to-date
+        run: |
+          echo "🔍 Verifying builds/releases/ is up-to-date..."
+          cd builds
+          python3 fix_releases.py
+          cd ..
+          if ! git diff --quiet builds/releases/; then
+            echo ""
+            echo "❌ builds/releases/ is out of date. Diff:"
+            git diff builds/releases/
+            echo ""
+            echo "Run locally and commit:"
+            echo "  cd builds"
+            echo "  python fix_releases.py"
+            echo "  git add releases/"
+            echo "  git commit -m 'Update release files'"
+            exit 1
+          fi
+          echo "✅ builds/releases/ is up-to-date"
 
       - name: Load release body text
         id: release_body
@@ -112,7 +131,7 @@ jobs:
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
           echo "tag=${VERSION}" >> $GITHUB_OUTPUT
           echo "Final version: ${VERSION}"
-          echo "ehRadio Version $(grep -oP '#define RADIOVERSION "\K[^"]+' src/core/options.h)" > version.txt
+          echo "ehRadio (Trip5) Version $(grep -oP '#define RADIOVERSION "\K[^"]+' src/core/options.h)" > version.txt
 
       - name: Validate version matches options.h
         run: |

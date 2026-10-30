@@ -6,6 +6,10 @@
 #define CHARWIDTH   6
 #define CHARHEIGHT  8
 
+// Widget text buffers: one size for every scrolling line and text widget
+// Every conf used to carry this as ScrollConfig.buffsize and every one of them wrote 140...
+#define WIDGET_BUFF_SIZE 140
+
 class psFrameBuffer;
 
 class Widget{
@@ -18,11 +22,13 @@ class Widget{
       _fgcolor  = fgcolor;
       _bgcolor  = bgcolor;
       _width = _backMove.width = 0;
-      _backMove.x = _config.left;
+      _backMove.x = _config.offset;
       _backMove.y = _config.top;
       _moved = _locked = false;
     }
-    void setAlign(WidgetAlign align){
+    // A number, like the member it writes: callers pass either a WA_* name or a stored cell, and an enum
+    // converts to an integer but not the other way round.
+    void setAlign(uint8_t align){
       _config.align = align;
     }
     // _present = the active layout provides this widget, set only by hideByLayout()/showByLayout(). It outranks
@@ -43,18 +49,56 @@ class Widget{
       // conf that still carries one must stay inert rather than jump to (0, 0).  Never make width
       // unsigned: a stale -1 would become a 65535 px span at the assignment below.
       if(mv.width<0) return;
+      // Already there: nothing to erase and nothing to draw.  applyMove() compares a MOVE against the
+      // conf position, not against where the widget IS, so a path that applies the same MOVE twice (the
+      // screensaver exit does, before and after the page switch) would otherwise re-clear over the page
+      // that was just painted.  A width of 0 means "keep the width", so only a MOVE carrying one can
+      // change it.
+      if(mv.x == _config.offset && mv.y == _config.top
+         && (mv.width == 0 || mv.width == _width)) return;
       _moved = true;
       if(_active && !_locked) _clear();
-      _config.left = mv.x;
+      _config.offset = mv.x;
       _config.top = mv.y;
       if(mv.width>0) _width = mv.width;
       _reset();
       _draw();
     }
+    // The geometry half of moveTo() with none of the panel work.  The screensaver uses it to place the
+    // clock inside its walk area BEFORE the page is painted: the page's own activation then draws it in
+    // the widget order that puts the info line and the meter over it, instead of moveTo() painting the
+    // clock once on the outgoing page and again before its neighbours.
+    void moveToQuiet(MoveConfig mv){
+      if(mv.width<0) return;
+      _moved = true;
+      _config.offset = mv.x;
+      _config.top = mv.y;
+      if(mv.width>0) _width = mv.width;
+      _reset();
+    }
+    // Would this MOVE change anything?  A conf spells "this state does not move this line" as the conf's OWN
+    // position, because an ALL-ZERO move means something else: it is how a state HIDES its line
+    // (_weatherHidden()'s yieldsToVU/yieldsNoVU, mirroring applyMove()'s moveZeroed() guard).  Repainting a move
+    // that changes nothing is a visible flicker - the erase and the redraw are two passes over the panel and the
+    // gap between them is a background-coloured tear across the line's span, which is the reported "line torn
+    // through the row" on every start and stop of the stream.  A width of 0 in a move means "keep the width", so
+    // only a move that carries one can change it.
+    bool moveIsNoop(const MoveConfig& mv) const {
+      return mv.x == _backMove.x && mv.y == _backMove.y
+             && (mv.width <= 0 || mv.width == _backMove.width);
+    }
+    // The same question about where the widget IS rather than where it is being sent: the way back has nothing to
+    // do once the line is already at the conf's position.
+    bool atBackPosition() const {
+      return _config.offset == _backMove.x && _config.top == _backMove.y
+             && (int16_t)_width == _backMove.width;
+    }
     void moveBack(){
       if(!_moved) return;
+      // Already home: nothing to restore, so nothing to erase and nothing to draw.
+      if(atBackPosition()) { _moved = false; return; }
       if(_active && !_locked) _clear();
-      _config.left = _backMove.x;
+      _config.offset = _backMove.x;
       _config.top = _backMove.y;
       _width = _backMove.width;
       _moved = false;
@@ -75,10 +119,10 @@ class Widget{
 class TextWidget: public Widget {
   public:
     TextWidget() {}
-    TextWidget(WidgetConfig wconf, uint16_t buffsize, bool uppercase, uint16_t fgcolor, uint16_t bgcolor) { init(wconf, buffsize, uppercase, fgcolor, bgcolor); }
+    TextWidget(WidgetConfig wconf, uint16_t fgcolor, uint16_t bgcolor, uint16_t buffsize = WIDGET_BUFF_SIZE) { init(wconf, fgcolor, bgcolor, buffsize); }
     ~TextWidget();
     using Widget::init;
-    void init(WidgetConfig wconf, uint16_t buffsize, bool uppercase, uint16_t fgcolor, uint16_t bgcolor);
+    void init(WidgetConfig wconf, uint16_t fgcolor, uint16_t bgcolor, uint16_t buffsize = WIDGET_BUFF_SIZE);
     // Virtual because a subclass held as a TextWidget* must still be entered through its own overloads. The boot line
     // is that case: a ScrollWidget kept in a TextWidget*, where only ScrollWidget::setText() sets _doscroll and
     // measures with its own _charWidth. Bound statically, the base ran instead, so the scroll state was never
@@ -89,12 +133,12 @@ class TextWidget: public Widget {
     // Paints the CURRENT text again, whether or not it has changed. setText() deliberately does nothing when the
     // string is the one already up, which is right for a value that only moves on events and wrong for a line
     // something else may paint over: the SD manager's countdown blank was issued once and never repeated.
-    void repaint();
-    bool uppercase() { return _uppercase; }
+    // Virtual because a ScrollWidget must not go through _paint(): its erase is unclipped and as wide as the whole
+    // string, which for a scrolling line reaches past its span.
+    virtual void repaint();
   protected:
     char *_text = nullptr;
     char *_oldtext = nullptr;
-    bool _uppercase;
     // Initialised, so a widget that has never been init()'d is inert rather than full of stack garbage.
     uint8_t _charWidth = 0;
     uint16_t  _buffsize = 0, _textwidth = 0, _oldtextwidth = 0, _oldleft = 0, _textheight = 0;
@@ -129,15 +173,15 @@ const char* scrollMark();
 class ScrollWidget: public TextWidget {
   public:
     ScrollWidget(){}
-    // The mark this line joins its tail and its head with is no longer the caller's business: scrollMark() owns
-    // the character and the holiday swap in one place (see plans/holiday-icons.md).
-    ScrollWidget(ScrollConfig conf, uint16_t fgcolor, uint16_t bgcolor);
+    ScrollWidget(ScrollConfig conf, uint16_t fgcolor, uint16_t bgcolor, uint16_t buffsize = WIDGET_BUFF_SIZE);
     ~ScrollWidget();
     using Widget::init;
-    void init(ScrollConfig conf, uint16_t fgcolor, uint16_t bgcolor);
+    void init(ScrollConfig conf, uint16_t fgcolor, uint16_t bgcolor, uint16_t buffsize = WIDGET_BUFF_SIZE);
     void loop();
     void setText(const char* txt) override;
     void setText(const char* txt, const char *format) override;
+    void repaint() override;      // its own _draw(), not TextWidget's unclipped erase
+    void setTextLooped(const char* txt);
   private:
     char *_sep = nullptr;
     char *_window = nullptr;
@@ -166,6 +210,7 @@ class ScrollWidget: public TextWidget {
     void _refreshMark();               // re-ask while the line is live: a holiday can begin at midnight
     void _spanPainted();               // a scrolling paint owns the whole span, not just its own box
     bool _checkIsScrollNeeded();
+    uint16_t _widthOf(const char* raw);   // the width setText() would measure for this raw string
     bool _checkDelay(int m, uint32_t &tstamp);
     void _clear();
     void _reset();
@@ -204,11 +249,18 @@ struct ClockFontSel {
 class NumWidget: public TextWidget {
   public:
     using Widget::init;
-    void init(WidgetConfig wconf, uint16_t buffsize, bool uppercase, uint16_t fgcolor, uint16_t bgcolor);
+    void init(WidgetConfig wconf, uint16_t fgcolor, uint16_t bgcolor, uint16_t buffsize = WIDGET_BUFF_SIZE);
     void setText(const char* txt) override;
     void setText(int val, const char *format) override;
+    // The widest value this screen can show.  With the glow on, the value is zero-filled to that many digits,
+    // so every glow cell has a digit in it.  The source owns the figure: VOLUME_SCALE for the volume, the
+    // playlist total for a station/track number, 0 for "no field".
+    void setFieldMax(uint32_t maxval);
   protected:
     ClockFontSel _cf {nullptr, 0, 1};
+    uint8_t _padwidth = 1;     // digits of that widest value; 1 pads nothing
+    char _glowField[6] = "";   // one glow cell per printed digit + NUL; a uint16_t total is at most 5
+    bool _glowOn();
     void _getBounds();
     void _draw();
 };
@@ -228,6 +280,9 @@ class ProgressWidget: public TextWidget {
     void init(WidgetConfig conf, ProgressConfig pconf, uint16_t fgcolor, uint16_t bgcolor,
               const char* frameLeft = nullptr, const char* frameGlyph = nullptr);
     void loop();
+    // The blob may be a different colour from the two frame glyphs (the boot screen's BOOT_DOT_COLOR).  Set it after
+    // init(): _dotColor starts as the widget's own fgcolor, so a caller that never calls this gets a one-colour line.
+    void setDotColor(uint16_t c) { _dotColor = c; }
   protected:
     // Full paint, and the only path that draws the two static glyphs: activation, layout changes and screensaver
     // restarts come through here, while the animation paints single cells in _progress(). That split keeps a TFT from
@@ -243,6 +298,7 @@ class ProgressWidget: public TextWidget {
     // because a U+00B7 dot is two of them and a character count cuts the line mid-dot.
     uint16_t _runway = 0;
     uint16_t _fieldX = 0;                  // x of the first dot column, recorded by the last full paint
+    uint16_t _dotColor = 0;                // the runway's ink; init() sets it to fgcolor, setDotColor() may change it
     uint16_t _oldLead = 0, _oldDots = 0;   // what the last painted frame showed, for the cell delta
     bool _painted = false;                 // false until _draw() has put a known picture on the panel
     uint8_t _pg;
@@ -259,6 +315,10 @@ class ClockWidget: public Widget {
     using Widget::init;
     ~ClockWidget();
     void init(WidgetConfig wconf, uint16_t fgcolor, uint16_t bgcolor);
+    // Rebuild for the size the current screen state gives this clock (see _clockConfSize() in widgets.cpp), doing
+    // nothing when that is the size it is already drawn at.  The Display calls it entering and leaving the
+    // screensaver: the Smaller Clock option is not a layout change, and init() is the only place a size is resolved.
+    void refreshSize(WidgetConfig conf);
     void draw();
     void forceDraw() { _draw(); }
     uint8_t textsize(){ return _config.textsize; }
@@ -267,6 +327,7 @@ class ClockWidget: public Widget {
     inline uint16_t clockWidth(){ return _clockwidth; }
     inline uint16_t clockHeight(){ return _clockheight; }
     inline uint16_t timeHeight(){ return _timeheight; }
+    bool _compactClock() const { return _superfont <= 1; }
   private:
     Adafruit_GFX &getRealDsp();
   protected:
@@ -280,7 +341,9 @@ class ClockWidget: public Widget {
     // template, and the seconds' <g><g>.  Arrays, not pointers, because the character is a runtime
     // value.  The initialisers are the size-index-0 case — no clock font to ask, so the digit '0'
     // stands in, which every system font is guaranteed to have at CHARWIDTH; there the clock is
-    // drawn by the display font and the string is only ever measured, never printed.
+    // drawn by the display font and the string is only ever measured, never printed.  _glowOn()
+    // enforces that, and the characters must NOT be blanked for size 0 instead: they are the width
+    // templates _timewidth and _secwidth are read off.
     char _glow[6] = "00:00";
     char _glowSec[3] = "00";
     // The seconds block's width IN PIXELS, measured in _getTimeBounds() from the SECONDS font's own
@@ -292,7 +355,26 @@ class ClockWidget: public Widget {
     // The clock font resolved from this widget's own clockConf.textsize.
     ClockFontSel _cf {nullptr, 0, 1};
     uint16_t _clockleft, _clockwidth, _timewidth, _dotsleft, _linesleft;
+    // The clock's OWN row: the time, plus the seconds when they follow it on that row.  The compact sizes
+    // align the two rows against each other inside the box (see _rowLeft), so this width has to be known to
+    // the print as well as to _getTimeBounds(), which is where it is measured.
+    uint16_t _rowwidth = 0;
     uint8_t  _clockheight, _timeheight, _dateheight, _space;
+    // One row's worth of gap for this size, used for the seconds' gap and for the date's row.  Identical to
+    // _space for indices 1..4; at index 0, where _space is 0, it is a whole built-in character row - a clock
+    // font's ink sits above its cursor and the built-in cell's below it, so that is the honest gap there.
+    uint8_t  _rowgap = 0;
+    // The date line, built into _datebuf.  _getTimeBounds() builds it as well as the print, because at the
+    // compact sizes the date is usually the wider of the clock's two rows and the box is sized for it.
+    void _dateString();
+    // Where a row of width rowW starts.  At the compact sizes the two rows are aligned INDEPENDENTLY inside the
+    // box - the box is the wider of them - so a centred clock centres its time row and its date row separately
+    // rather than centring the block as a whole.  Above those sizes it is the box's own left edge, because
+    // there the box is one row and is placed as a whole.
+    uint16_t _rowLeft(uint16_t rowW);
+    // Whether this clock glows: the stored setting AND a clock font to glow with.  One predicate because three
+    // draws ask it - the time's glow, the seconds' glow and the colon's own off colour.
+    bool _glowOn();
     uint16_t _forceflag = 0;
     bool dots = true;
     // The layout's two clock transforms (LayoutData.fullClock / .seconds).  Neither is derived from
@@ -306,7 +388,9 @@ class ClockWidget: public Widget {
     void _reset();
     void _getTimeBounds();
     void _printClock(bool force=false);
-    void _clearClock();
+    // `push` is whether the erase itself must take the panel (see the definition): every caller wants that
+    // except _printClock()'s force path, which repaints and displays the same window a few lines later.
+    void _clearClock(bool push = true);
     bool _getTime();
     uint16_t _left();
     uint16_t _top();
@@ -339,16 +423,10 @@ class PlayListWidget: public Widget {
     void drawPlaylist(uint16_t currentItem);
     inline uint16_t itemHeight(){ return _plItemHeight; }
 
-    #if PLAYLIST_MODE_PAGED
-      void resetState() { _plPrevItem = 0; }
-      inline uint16_t currentTop(){ 
-        if (_plPrevItem == 0) return _plYStart;
-        uint8_t slot = (_plPrevItem - _plPageStart);
-        return _plYStart + slot * _plItemHeight; 
-      }
-    #else
-      inline uint16_t currentTop(){ return _plYStart+_plCurrentPos*_plItemHeight; }
-    #endif
+    // Both playlist paths are compiled now: playlistPages is a runtime option (it was PLAYLIST_MODE_PAGED), so the
+    // state and the two painters always exist and currentTop()/drawPlaylist() choose between them.
+    void resetState() { _plPrevItem = 0; }
+    uint16_t currentTop();
 
   private:
     ScrollWidget* _current;
@@ -357,16 +435,14 @@ class PlayListWidget: public Widget {
     uint8_t _fillPlMenu(int from, uint8_t count);
     void _printPLitem(uint8_t pos, const char* item);
 
-    #if PLAYLIST_MODE_PAGED
-      uint8_t  _plPageSize;
-      uint16_t _plPageStart, _plPrevItem;
-      uint16_t _plPlaylistTop, _plPlaylistBottom;
-      void _drawPaged(uint16_t currentItem);
-      void _printPLitemPaged(uint16_t stationId, uint16_t y, bool selected, const char* name);
-    #else
-      uint16_t _plTtemsCount, _plCurrentPos;
-      void _drawFade(uint16_t currentItem);
-    #endif
+    uint8_t  _plPageSize;
+    uint16_t _plPageStart, _plPrevItem;
+    uint16_t _plPlaylistTop, _plPlaylistBottom;
+    uint16_t _plTtemsCount, _plCurrentPos;
+    bool     _paged;          // playlistPages() as init() read it; the option is a runtime setting now
+    void _drawPaged(uint16_t currentItem);
+    void _printPLitemPaged(uint16_t stationId, uint16_t y, bool selected, const char* name);
+    void _drawFade(uint16_t currentItem);
 };
 
 #endif

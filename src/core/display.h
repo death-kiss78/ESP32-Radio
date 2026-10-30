@@ -4,6 +4,14 @@
 #include "common.h"
 #include "../displays/widgets/widgetsconfig.h"  // WidgetConfig types + layout switching pointers
 
+static constexpr uint32_t DSP_QUEUE_TICKS = 0; // xQueueReceive timeout inside display.loop(): 0 = non-blocking poll
+
+// What a re-init reads its two halves from.  The stored ids are the ordinary path; a staged variant is an
+// editor preview, where the web handler has already parsed the new document into a scratch copy.  They are
+// separate modes rather than one flag because the two previews stage different things: a theme preview must
+// keep the stored layout, and a layout preview must keep the live theme.
+enum applyMode_e : uint8_t { APPLY_STORED = 0, APPLY_STAGED_THEME, APPLY_STAGED_LAYOUT };
+
 #ifndef DUMMYDISPLAY
 class ScrollWidget;
 class PlayListWidget;
@@ -67,6 +75,7 @@ class Display {
     bool deepsleep();
     void wakeup();
     void updateProgress(const char* label, float progress);
+    void clearProgress();
     #ifdef USE_SD
       // Redraws the SD Manager countdown
       void sdmanCountdown();
@@ -80,12 +89,10 @@ class Display {
   private:
     ScrollWidget *_meta = nullptr, *_title1 = nullptr, *_plcurrent = nullptr, *_weather = nullptr, *_title2 = nullptr;
     PlayListWidget *_plwidget = nullptr;
-    #ifdef UPDATEURL
-      ScrollWidget *_updLabel = nullptr;
-      TextWidget *_updValue = nullptr;
-      bool _updFirstCall = true;
-      int _updBarWidth = 10;
-    #endif
+    ScrollWidget *_updLabel = nullptr;
+    TextWidget *_updValue = nullptr;
+    bool _updFirstCall = true;
+    int _updBarWidth = 10;
     BitrateWidget *_fullbitrate = nullptr;
     FillWidget *_metabackground = nullptr, *_plbackground = nullptr, *_underline = nullptr, *_overline = nullptr;
     SliderWidget *_volbar = nullptr, *_bufferbar = nullptr;
@@ -94,10 +101,12 @@ class Display {
     Page *_footer = nullptr;
     Page *_overLinePage = nullptr;
     VuWidget *_vuwidget = nullptr;
+    bool _vuNotDrawable = false;
     VuWidget *_ssvu = nullptr;
     ScrollWidget *_sstext = nullptr;
     bool _ssFailed = false;
     bool _ssMeterUp = false;
+    uint32_t _ssHoldUntil = 0;
     NumWidget *_nums = nullptr;
     ClockWidget *_clock = nullptr;
     Page *_boot = nullptr;
@@ -109,25 +118,36 @@ class Display {
     #endif
     Ticker _returnTicker;
     bool _locked = false;
+    // An SD re-index owns the panel while this is up (SDINDEXSTART / SDINDEXDONE).  It is written and cleared ONLY by
+    // this task, which is what makes the release impossible to refuse: see the guard in _switchMode().
+    bool _indexHold = false;
     uint8_t _bootStep = 0;
     displayRequestType_e _deferredType = NOPE;
     int _deferredPayload = 0;
     uint32_t _droppedRequests = 0;
     uint32_t _deferredDueMs = 0;
     void _createDspTask();
+    void _applyBitrate();
     void _reinitWidgets();
     void _setLayoutPointers();
     void _syncLineRule(FillWidget*& w, const FillConfig* conf, bool under);
     void _applyMetaInvert();
-    // inPlace is the editor's live preview: the same re-init, but the current page is refilled where
-    // it stands instead of the device being sent to the player page, so nothing else changes.
-    void _applyState(bool inPlace = false);
+    void _applyState(applyMode_e mode = APPLY_STORED);
     void _showDialog(const char *title);
-    void _showNumbers(const char* header, int32_t value, const char* fmt, bool dialogPage);
+    void _showNumbers(const char* header, int32_t value, const char* fmt, bool dialogPage, uint32_t fieldmax = 0);
     void _setReturnTicker(uint8_t time_s);
     bool _ownScreen() const;
     bool _drawsOverOwnScreen(displayRequestType_e type) const;
-    // Widget visibility = runtime state AND active layout, decided in one place.
+    // The footer sub-page's widgets, in insertion order, one bit each.  A bitmask rather than six flags because
+    // ONE table decides which screen keeps which, and every reader asks that table the same question.
+    enum FooterWidget_e : uint8_t {
+      FW_VOLBAR = 1u << 0, FW_VOLTXT = 1u << 1, FW_VOLIP = 1u << 2,
+      FW_BATT   = 1u << 3, FW_RSSI   = 1u << 4, FW_BUFBAR = 1u << 5,
+      FW_ALL    = FW_VOLBAR | FW_VOLTXT | FW_VOLIP | FW_BATT | FW_RSSI | FW_BUFBAR
+    };
+    uint8_t _footerMask() const;
+    bool _footerShown(uint8_t bit) const { return (_footerMask() & bit) != 0; }
+    void _applyFooter();
     bool _clockHidden();
     bool _weatherHidden();
     void _switchMode(displayMode_e newmode);
@@ -138,13 +158,18 @@ class Display {
     uint16_t _ssContentH();
     uint16_t _ssTextTop();
     void _screensaverLine();
+    void _ssHoldLine(uint32_t ms);
     void _screensaverWidgets();
+    void _screensaverClockTarget(MoveConfig& mv);
     void _enterScreensaver(displayMode_e mode);
     void _buildJsonCache();
     void _buildThemeListJson();
+    void _buildLayoutListJson();
     String _themeListJson;
     uint16_t _themeListGen;
+    uint16_t _layoutListGen;
     bool _previewPending;
+    bool _layoutPreviewPending;
     String _layoutListJson;
     String _systemFontListJson;
     String _clockFontListJson;
@@ -194,6 +219,7 @@ class Display {
     uint16_t width() { return 0; }
     uint16_t height() { return 0; }
     void updateProgress(const char* label, float progress) {}
+    void clearProgress() {}
     #ifdef USE_SD
       void sdmanCountdown() {}
     #endif
