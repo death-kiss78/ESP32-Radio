@@ -107,32 +107,19 @@ jobs:
               gzip -c -9 "$file" > "www_release/$filename.gz"
             fi
           done
-          
+
       - name: Package Upload_Files.zip
         run: |
-            echo "📦 Creating Upload_Files.zip..."
-            mkdir -p upload_pkg/www upload_pkg/data
-            cp www_release/* upload_pkg/www/
-            CSV_DIR=""
-            if [ -f "data/playlist.csv" ] && [ -f "data/wifi.csv" ]; then
-            CSV_DIR="data"
-            elif [ -f "data/data/playlist.csv" ] && [ -f "data/data/wifi.csv" ]; then
-            CSV_DIR="data/data"
-            fi
-            
-            if [ -n "$CSV_DIR" ]; then
-            cp "$CSV_DIR/playlist.csv" "$CSV_DIR/wifi.csv" upload_pkg/data/
-            echo "✅ Copied playlist.csv and wifi.csv from $CSV_DIR"
-            else
-            echo "⚠️ playlist.csv and wifi.csv not found under data/ or data/data/; skipping"
-            fi
-            
-            cd upload_pkg
-            zip -r ../Upload_Files.zip .
-            cd ..
-            echo "✅ Upload_Files.zip created"
-            unzip -l Upload_Files.zip
-            
+          echo "📦 Creating Upload_Files.zip..."
+          mkdir -p upload_pkg/www upload_pkg/data
+          cp www_release/* upload_pkg/www/
+          cp builds/releases/data/playlist.csv builds/releases/data/wifi.csv upload_pkg/data/
+          cd upload_pkg
+          zip -r ../Upload_Files.zip .
+          cd ..
+          echo "✅ Upload_Files.zip created"
+          unzip -l Upload_Files.zip
+
       - name: Get version tag
         id: get_version
         run: |
