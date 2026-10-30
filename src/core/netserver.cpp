@@ -1,8 +1,10 @@
 #include "options.h"
+#include "coredump.h"
 #include <Arduino.h>
 #include <ArduinoJson.h>
 #include <ESPFileUpdater.h>
 #include <ESPmDNS.h>
+#include <esp_heap_caps.h>
 #include <esp_task_wdt.h>
 #include <freertos/FreeRTOS.h>
 #include <LittleFS.h>
@@ -130,7 +132,7 @@ void StaticFileCache::loadAll() {
         loadOne(Config::wwwFiles[i], count);
         if (entries[count].data || entries[count].gzData) count++;
     }
-    SERIALLOGX("Loaded %d files into PSRAM cache\t", count);
+    FUNCTIONLOG("Netserver", "Loaded %d files into PSRAM cache", count);
 }
 
 size_t StaticFileCache::totalBytes() const {
@@ -315,6 +317,11 @@ void handleSearchPost(AsyncWebServerRequest *request) {
       player.sendCommand({PR_PLAY, (uint16_t)foundIdx});
       request->send(200, "text/plain", "DUPLICATE");
     } else { // add it and play it
+      if (cs >= MAX_PLAYLIST_ENTRIES) {
+        WARNINGLOG("playlist is full (%u stations): not adding \"%s\"", (unsigned)MAX_PLAYLIST_ENTRIES, sName.c_str());
+        request->send(400, "text/plain", "PLAYLIST FULL");
+        return;
+      }
       File playlistfile = LittleFS.open(PLAYLIST_PATH, "a");
       if (playlistfile) {
         // can't use printf ??Arduino's Print::printf has a 64-byte stack buffer that overflows on long URLs
@@ -364,9 +371,18 @@ void NetServer::restartMdns() {
 
 bool NetServer::begin(bool quiet) {
   if (network.status==SDOFFLINE) return true;
-  if (!quiet) BOOTLOGX("netserver.begin\t");
+  // One complete line at the end, with how long it took
+  const uint32_t beganMs = millis();
+  #ifdef NETSERVER_DEBUG
+    auto phase = [beganMs](const char* what) {
+      FUNCTIONLOG("Netserver", "  begin phase: %s at %lu ms", what, (unsigned long)(millis() - beganMs));
+    };
+  #else
+    auto phase = [](const char*) {};
+  #endif
   nsQueue = xQueueCreate(64, sizeof(nsRequestParams_t));
   if (nsQueue==NULL) { ERRORLOG("NETSERVER: nsQueue alloc failed? Rebooting."); delay(10); ESP.restart(); }
+  phase("queue");
 
   webserver.on("/", HTTP_ANY, handleIndex);
   webserver.on("/ready", HTTP_GET, handleReady);
@@ -396,7 +412,9 @@ bool NetServer::begin(bool quiet) {
   webserver.on("/ncsi.txt", HTTP_GET, captiveRedirect);                     // Windows
   webserver.on("/connecttest.txt", HTTP_GET, captiveRedirect);              // Windows
 
+  phase("routes");
   if (psramFound()) fileCache.loadAll();
+  phase("psram cache");
   webserver.onNotFound(handleNotFound);
   webserver.onFileUpload(handleUpload);
   #ifdef CORS_DEBUG
@@ -404,8 +422,10 @@ bool NetServer::begin(bool quiet) {
     DefaultHeaders::Instance().addHeader(F("Access-Control-Allow-Headers"), F("content-type"));
   #endif
   webserver.begin();
+  phase("webserver.begin");
   if (strlen(config.store.mdnsname)>0)
     MDNS.begin(config.store.mdnsname);
+  phase("mdns");
 
   websocket.onEvent(onWsEvent);
   webserver.addHandler(&websocket);
@@ -447,7 +467,8 @@ bool NetServer::begin(bool quiet) {
   #endif //#if USE_OTA
 
   listening = true;
-  if (!quiet) SERIALLOG("done");
+  phase("ota + websocket");
+  if (!quiet) BOOTLOG("netserver.begin %lu ms", (unsigned long)(millis() - beganMs));
   return true;
 }
 
@@ -526,8 +547,10 @@ void NetServer::processQueue() {
           if (network.status == CONNECTED) {
                                                                 act += F("\"group_system\",");
             if (battery.isInitialized() || DBGWUI)              act += F("\"group_battery\",");
-            if (DSP_MODEL != DSP_DUMMY || DBGWUI)
-                                                                act += F("\"group_display\",");
+            if (DSP_MODEL != DSP_DUMMY || DBGWUI)               act += F("\"group_display\",");
+            #if defined(DSP_TFT) || DBGWUI
+                                                                act += F("\"group_tft\",");
+            #endif
             #if (I2S_BCLK!=255 || (VS1053_CS != 255 && VS_PATCH_ENABLE == true) || DBGWUI)
                                                                 act += F("\"group_vu_ss\",");
               if (presentOf(*vuConf_ptr) || DBGWUI)             act += F("\"group_vu\",");
@@ -539,15 +562,26 @@ void NetServer::processQueue() {
                                                            else act += F("\"hide_group_buffer\",");
             if (BRIGHTNESS_PIN != 255 || DBGWUI)                act += F("\"group_brightness\",");
             if (DSP_DIMMING_ENABLED || DBGWUI)                  act += F("\"group_dimming\",");
-            if (config.theme.clockbg != config.theme.background || DBGWUI)
+            if ((config.theme.clockbg != config.theme.background && activeLayout.clockConf.textsize != 0) || DBGWUI)
                                                                 act += F("\"group_clockglow\",");
                                                            else act += F("\"hide_group_clockglow\",");
+            if ((config.theme.digitbg != config.theme.background && activeLayout.numConf.textsize != 0) || DBGWUI)
+                                                                act += F("\"group_digitsglow\",");
+                                                           else act += F("\"hide_group_digitsglow\",");
+            if (activeLayout.clockConf.textsize != 0 || DBGWUI) act += F("\"group_smaller\",");
+                                                           else act += F("\"hide_group_smaller\",");
             if (display.getLayoutCount() > 1 || DBGWUI)         act += F("\"group_layout\",");
             #if defined(DSP_TFT) || DBGWUI
-              if (display.getThemeCount() > 1|| DBGWUI)         act += F("\"group_theme\",");
+              if (display.getThemeCount() > 1 || DBGWUI)        act += F("\"group_theme\",\"group_display_theme\",");
+            #else
+                                                                act += F("\"group_theme\",\"group_webui_theme\",");
             #endif
-            if (activeLayout.fullClock || DBGWUI)               act += F("\"group_full_time\",");
+            if (((activeLayout.fullClock || activeLayout.seconds) && activeLayout.clockConf.textsize != 0) || DBGWUI)
+                                                                act += F("\"group_full_time\",");
                                                            else act += F("\"hide_group_full_time\",");
+            #if (!defined(DEEP_SLEEP_DISABLE) || DBGWUI)
+                                                                act += F("\"group_deepsleep\",");
+            #endif
             if (TS_MODEL != TS_MODEL_UNDEFINED || DBGWUI)       act += F("\"group_touch\",");
                                                                 act += F("\"group_locale\",");
             if (presentOf(*weatherConf_ptr) || DBGWUI)          act += F("\"group_weather\",");
@@ -590,23 +624,12 @@ void NetServer::processQueue() {
                                   config.store.irtlp,
                                   VOLUME_SCALE);
                                   break;
-      case GETSCREEN:     snprintf(wsbuf, sizeof(wsbuf), "{\"flip\":%d,\"inv\":%d,\"nump\":%d,\"dspon\":%d,\"br\":%d,\"scre\":%d,\"scrb\":%d,\"scrt\":%d,\"scrpe\":%d,\"scrpb\":%d,\"scrpt\":%d,\"scrfull\":%d,\"scrtext\":%d,\"scrvu\":%d,\"scrstyle\":%d,\"scrpeak\":%d,\"bufbar\":%d,\"vu\":%d,\"vupeak\":%d,\"vustyle\":%d,\"dim\":%d,\"dimto\":%d,\"dimbr\":%d,\"volpg\":%d,\"clock12\":%d,\"invtitle\":%d,\"layoutId\":%d,\"themeId\":%d,\"systemFontId\":%d,\"clockFontId\":%d,\"clockglow\":%d,\"plpaged\":%d,\"allcaps\":%d}",
+      case GETSCREEN:     snprintf(wsbuf, sizeof(wsbuf), "{\"flip\":%d,\"inv\":%d,\"nump\":%d,\"dspon\":%d,\"br\":%d,\"bufbar\":%d,\"vu\":%d,\"vupeak\":%d,\"vustyle\":%d,\"dim\":%d,\"dimto\":%d,\"dimbr\":%d,\"volpg\":%d,\"clock12\":%d,\"invtitle\":%d,\"layoutId\":%d,\"themeId\":%d,\"systemFontId\":%d,\"clockFontId\":%d,\"clockglow\":%d,\"digitsglow\":%d,\"plpaged\":%d,\"allcaps\":%d}",
                                   config.store.flipscreen,
                                   config.store.invertdisplay,
                                   config.store.numplaylist,
                                   config.store.dspon,
                                   config.store.brightness,
-                                  config.store.screensaverEnabled,
-                                  config.store.screensaverBlank,
-                                  config.store.screensaverTimeout,
-                                  config.store.screensaverPlayingEnabled,
-                                  config.store.screensaverPlayingBlank,
-                                  config.store.screensaverPlayingTimeout,
-                                  config.store.screensaverFullDateTime,
-                                  config.store.screensaverText,
-                                  config.store.screensaverVU,
-                                  config.store.screensaverVUStyle,
-                                  config.store.screensaverVUpeak,
                                   config.store.bufferbar,
                                   config.store.vumeter,
                                   config.store.vupeak,
@@ -622,8 +645,25 @@ void NetServer::processQueue() {
                                   config.store.systemFontId,
                                   config.store.clockFontId,
                                   config.store.clockglow,
+                                  config.store.digitsglow,
                                   config.store.playlistPages,
                                   config.store.pretextALLCAPS);
+                                  break;
+      case GETSCREENSAVER: snprintf(wsbuf, sizeof(wsbuf), "{\"scre\":%d,\"scrb\":%d,\"scrt\":%d,\"scrpe\":%d,\"scrpb\":%d,\"scrpt\":%d,\"scrfull\":%d,\"scrtext\":%d,\"scrsmall\":%d,\"scrvu\":%d,\"scrstyle\":%d,\"scrpeak\":%d,\"scrtimer\":%d,\"scrtimeout\":%d}",
+                                  config.store.screensaverEnabled,
+                                  config.store.screensaverBlank,
+                                  config.store.screensaverTimeout,
+                                  config.store.screensaverPlayingEnabled,
+                                  config.store.screensaverPlayingBlank,
+                                  config.store.screensaverPlayingTimeout,
+                                  config.store.screensaverFullDateTime,
+                                  config.store.screensaverText,
+                                  config.store.screensaverClockSmaller,
+                                  config.store.screensaverVU,
+                                  config.store.screensaverVUStyle,
+                                  config.store.screensaverVUpeak,
+                                  config.store.sleeptimer,
+                                  config.store.sleepSsTimeout);
                                   break;
       case GETLOCALE:     snprintf(wsbuf, sizeof(wsbuf), "{\"locale_webui\":\"%s\",\"locale_disp\":\"%s\",\"tz_name\":\"%s\",\"tzposix\":\"%s\",\"sntp1\":\"%s\",\"sntp2\":\"%s\",\"timeinterval\":%d}",
                                   config.store.locale_webui,
@@ -856,6 +896,15 @@ void NetServer::resetQueue() {
 
 int freeSpace;
 void handleUpload(AsyncWebServerRequest *request, String filename, size_t index, uint8_t *data, size_t len, bool final) {
+  #ifdef CORE_MONITOR
+    if (final) {
+      // Read on the final chunk, not on a page load: the high-water mark is cumulative, so by now it includes
+      // every chunk written, and this path (/upload, /update, /webboard) is the heaviest thing the AsyncTCP task
+      // does.  This is the figure CONFIG_ASYNC_TCP_STACK_SIZE should be set against - a websocket connect is the
+      // lightest.
+      FUNCTIONLOG("Core.HWM", "[%s] stack HWM after upload: %u bytes", pcTaskGetName(NULL), uxTaskGetStackHighWaterMark(NULL));
+    }
+  #endif
   if (request->url()=="/upload") {
     if (!index) {
       freeSpace = (float)LittleFS.totalBytes()/100*68-LittleFS.usedBytes();
@@ -932,6 +981,14 @@ void onWsEvent(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsEventTyp
   switch (type) {
     case WS_EVT_CONNECT:
         FUNCTIONLOG("Websocket", "client #%u connected from %s", client->id(), client->remoteIP().toString().c_str());
+        #ifdef CORE_MONITOR
+          // This callback runs on the AsyncTCP event task, so this is THAT task's headroom - the number the
+          // CONFIG_ASYNC_TCP_STACK_SIZE decision needs (its default is 8192 * 2 = 16 KB, the largest single
+          // allocation the WebUI bring-up makes).  It lives here rather than in handleIndex() because that line
+          // never appeared in a boot where the page demonstrably loaded; a websocket connect is a path the log
+          // proves is reached.  The reading that matters most is still the one taken during an SD upload.
+          FUNCTIONLOG("Core.HWM", "[%s] stack HWM: %u bytes", pcTaskGetName(NULL), uxTaskGetStackHighWaterMark(NULL));
+        #endif
         // Send current battery status to the newly connected client immediately
         netserver.requestOnChange(GETBATTERY, client->id());
         // And the file manager's state: a page that opened while the manager was already up is told so instead of
@@ -1077,11 +1134,11 @@ void vTaskSearchRadioBrowser(void *pvParameters) {
         jsonFile.close();
         if (lastChar != ']') {
           if (server_retried == true) {
-            FUNCTIONLOG("Search", "[Warning] JSON validation failed. Not retrying.");
+            WARNINGLOG("Search: JSON validation failed. Not retrying.");
             server_retried = false;
             LittleFS.remove(localPath); // Clean up bad file
           } else {
-            FUNCTIONLOG("Search", "[Warning] JSON validation failed. Retrying same server.");
+            WARNINGLOG("Search: JSON validation failed. Retrying same server.");
             server_retried = true;
             --i;
             LittleFS.remove(localPath); // Clean up bad file
@@ -1286,6 +1343,11 @@ void launchPlaybackTask(const String& url, const String& name) {
   // in case they never finish, so a stuck state cannot wedge the feature - the same rule Mqtt::servicesWaitLimitMs has.
   static constexpr uint32_t rbClickServicesWaitMs = 60000;
   static bool rbClickHoldLogged = false;
+  // What a TLS lookup actually needs: one contiguous block for the handshake on top of this task's 8 KB stack -
+  // the same figure ESPFileUpdater's ESPFILEUPDATER_MIN_HEAP_FOR_SSL is built on.  This is the whole gate: there is
+  // no time window, because a wall-clock wait neither knew when a page load was coming nor let a device nobody visits
+  // report its click promptly.  Nothing here waits for a browser.
+  static constexpr uint32_t rbClickTlsMinBlock = 40960;
   // Helper: Make HTTPS request and extract a specific JSON key's value
   // Returns extracted value or empty string on failure
   String streamJsonExtract(const String& url, const char* key) {
@@ -1442,7 +1504,7 @@ void processRadioBrowserClick() {
       FUNCTIONLOG("RB Click", "Abandoning click");
       return;
     }
-    // Hold the click if Heap check fails and let the delay timer run, so the click survives the wait
+    // Hold the click while the services run, and let the delay timer run, so the click survives the wait
     if (startup.servicesPending() &&
         (millis() - clickDelayStart) < (RADIO_BROWSER_SEND_CLICK_DELAY*1000 + rbClickServicesWaitMs)) {
       if (!rbClickHoldLogged) {
@@ -1452,8 +1514,11 @@ void processRadioBrowserClick() {
       return; // still held
     }
     clickDelayActive = false;
-    if (ESP.getFreeHeap() <= MIN_MALLOC) {
-      FUNCTIONLOG("Heap", "low heap (%u), refusing rb click task spawn", ESP.getFreeHeap());
+    if (!heapCanAffordTls(rbClickTlsMinBlock)) {
+      // Dropped, not held: a statistic is not worth waiting on a fragmented heap
+      FUNCTIONLOG("RB Click", "dropping click - no %u-byte contiguous block (free %u, largest %u)",
+                  (unsigned)rbClickTlsMinBlock, (unsigned)ESP.getFreeHeap(),
+                  (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
       return;
     }
     // Copy URL to pass to task (task will delete it)
@@ -1675,6 +1740,12 @@ void handleNotFound(AsyncWebServerRequest * request) {
         return request->requestAuthentication();
       }
   #endif
+  if (request->method() == HTTP_GET && request->url() == "/coredump") {
+    String text;
+    if (coredump::buildAllText(text)) request->send(200, "text/plain", text);
+    else                            request->send(404, "text/plain", "no crash logs");
+    return;
+  }
   // PSRAM cache check: serve static WebUI files from PSRAM (no LittleFS reads)
   if (request->method() == HTTP_GET) {
     String url = request->url();
@@ -1757,7 +1828,7 @@ void handleNotFound(AsyncWebServerRequest * request) {
     return;
   }
   if (request->url() == "/variables.js") {
-    char varjsbuf[WEBSOCKET_BUFFER];
+    char varjsbuf[640];
     char escapedRadioVersion[32];
     utility.escapeQuotes(RADIOVERSION, escapedRadioVersion, sizeof(escapedRadioVersion));
     char escapedGithubUrl[128];
@@ -1770,7 +1841,8 @@ void handleNotFound(AsyncWebServerRequest * request) {
       "var newVerAvailable=%s;\n"
       "var updateUrl='%s';\n"
       "var currentLocale='%s';\n"
-      "var casetransform=%s;\n",
+      "var webuiThemeId=%u;\n"
+      "document.documentElement.setAttribute('data-theme',webuiThemeId);\n",
       escapedRadioVersion,
       (network.status == CONNECTED && config.wwwFilesExist) ? "webboard" : "",
       (network.status == CONNECTED) ? "player" : "ap",
@@ -1782,7 +1854,7 @@ void handleNotFound(AsyncWebServerRequest * request) {
       (netserver.newVersionAvailable) ? "true" : "false",
       escapedGithubUrl,
       config.store.locale_webui,
-      editorOpt(config.store.pretextALLCAPS) ? "true" : "false"
+      (unsigned)config.store.themeId
    );
     AsyncWebServerResponse *response = request->beginResponse(200, "application/javascript", varjsbuf);
     response->addHeader("Cache-Control", "no-cache, no-store, must-revalidate");
@@ -1862,7 +1934,7 @@ void handleNotFound(AsyncWebServerRequest * request) {
       "var editorLayouts=%s;\n"
       "var dspFamily='%s';\n"
       "var confDsp={width:%d,height:%d,framewdt:%d,maxWidth:%d,scrollDelay:%d,scrollTime:%d,bootLogoTap:%d,hasConfMacros:%d,vuMaxWidth:%d,vuMaxHeight:%d};\n",
-      #if defined(DSP_TFT) || DBGWUI
+      #if defined(DSP_TFT)
         "true",
       #else
         "false",
@@ -1896,7 +1968,7 @@ void handleNotFound(AsyncWebServerRequest * request) {
   // loader, Save and Apply alike.  TFT-only (the same test the theme group in the WebUI uses), because
   // on a monochrome build a theme never reaches the panel at all.
   // ---------------------------------------------------------------------------
-  #if defined(DSP_TFT) || DBGWUI
+  #if defined(DSP_TFT)
   if (request->url() == "/theme-elements.json") {
     // One object per element, in table order which is also the field order: the key the page sends back
     // with a value, and the label it shows in the grid instead.  Both come from the one table in
@@ -2112,7 +2184,7 @@ void handleNotFound(AsyncWebServerRequest * request) {
     }
     // The body lands in the staging theme and the display task takes it from there; this task never
     // touches the live theme, and nothing at all is written to a file or to NVS.  A key the body leaves
-    // out comes back black, the same rule the files follow - and the page always sends all 43 keys, so
+    // out comes back black, the same rule the files follow - and the page always sends all 42 keys, so
     // that only ever shows up for a hand-made request.
     if (!themeParseTheme(dataArg->value().c_str(), themeStaging(), nullptr, 0)) {
       request->send(400, "text/plain", "Bad theme JSON");

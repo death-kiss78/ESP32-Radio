@@ -29,9 +29,9 @@
 
 
 const char* const Config::wwwFiles[] = {"options.js", "script.js", "script2.js",
-                                        "logo.svg", "icon.png", "style.css", "theme.css", "rb_srvrs.json", "timezones.json",
-                                        "curated.html", "irrecord.html", "options.html", "sdmanager.html", "search.html", "updform.html",
-                                        "editor.html", "player.html"}; // keep main page at end (deleted when upgraded, last to be downloaded, so user sees emptyfs_html with wait message)
+                                        "logo.svg", "icon.png", "style.css", "themes.css", "rb_srvrs.json", "timezones.json",
+                                        "curated.html", "editor.html", "irrecord.html", "options.html", "sdmanager.html", "search.html", "updform.html",
+                                        "player.html"}; // keep main page at end (deleted when upgraded, last to be downloaded, so user sees emptyfs_html with wait message)
 const size_t Config::wwwFilesCount = sizeof(Config::wwwFiles) / sizeof(Config::wwwFiles[0]);
 
 const char* const Config::dataFiles[] = {PLAYLIST_FILE, SSIDS_FILE, VERSION_FILE, THEME_SLOT_FILES, LAYOUT_SLOT_FILES};
@@ -160,7 +160,7 @@ void Config::changeMode(int newmode) {
     if (!sdman.ready && newmode!=PM_WEB) {
       #if SD_CARD_DETECT_PIN!=255
         if (digitalRead(SD_CARD_DETECT_PIN)==HIGH) {
-          ERRORLOG("SD card not inserted");
+          WARNINGLOG("SD card not inserted");
           netserver.requestOnChange(GETPLAYERMODE, 0);
           sdman.stop();
           return;
@@ -168,7 +168,7 @@ void Config::changeMode(int newmode) {
       #endif
       uint32_t _t_sdstart = millis();
       if (!sdman.start()) {
-        ERRORLOG("SD card not found");
+        WARNINGLOG("SD card not found");
         netserver.requestOnChange(GETPLAYERMODE, 0);
         sdman.stop();
         return;
@@ -184,6 +184,7 @@ void Config::changeMode(int newmode) {
     saveValue(&store.play_mode, store.play_mode);
     player.resetQueue();  // clear stale ticks commands before mode transition
     _SDplaylistFS = getMode()==PM_SDCARD?&sdman:(true?&LittleFS:_SDplaylistFS);
+    player.clearMute();   // a mode change always cancels mute
     netserver.requestOnChange(GETPLAYERMODE, 0);
     if (getMode()==PM_SDCARD) {
       if (pir) player.sendCommand({PR_STOP, 0});
@@ -224,6 +225,10 @@ void Config::changeMode(int newmode) {
     display.putRequest(NEWMODE, PLAYER);
     display.putRequest(NEWSTATION);
     display.putRequest(NEWTITLE);
+    // The footer IP line carries the mode in its icon (the card pair in SD playback mode), and only a real page
+    // change re-derives it: WEB -> SD passes through the SDCHANGE count screen, but SD -> WEB leaves the player
+    // screen already up, so _switchMode() returns at its "same mode" guard and nothing rewrites the line.  Ask.
+    display.putRequest(NEWIP, 0);
   #endif //#ifdef USE_SD
 }
 
@@ -260,6 +265,9 @@ void Config::initSDPlaylist(bool force) {
         uint32_t currentCount = sdman.countAudioFiles();
         FUNCTIONLOG("SD", "Index found:\tcount: %d magic: %04X\tcurrent count: %d",
                     storedCount, magic, currentCount);
+        // The walk above already paid for this figure: keep it as the total the SDCHANGE counter's zero-fill
+        // width is taken from, until the re-index below replaces it with the count the new index holds.
+        store.countStation = (uint16_t)currentCount;
         if (magic != 0x1867) {
           FUNCTIONLOG("SD", "Magic mismatch (should be 1867). Re-indexing.");
           doIndex = true;
@@ -322,7 +330,7 @@ void Config::initPlaylistMode() {
             return;  // no SD — nothing more to init
           } else {
             store.play_mode=PM_WEB;
-            ERRORLOG("SD card not inserted.");
+            WARNINGLOG("SD card not inserted.");
             changeMode(PM_WEB);
             _lastStation = store.lastStation;
           }
@@ -366,6 +374,10 @@ void Config::initPlaylistMode() {
     cs = utility.playlistLength();
     CONFIGTIMELOG("PlaylistLength #2");
   }
+  // The cached total the big number zero-fills to and _randomStation() picks from, and it has to describe the
+  // playlist THIS mode browses.  One line here covers boot and every mode change in both directions, whatever
+  // wwwOk decided - which is what kept an SD card's count on a web playlist.
+  setCountStation(cs);
   log_i("%d" ,_lastStation);
   // Validate station number is within range
   if (cs == 0) {
@@ -422,6 +434,11 @@ void Config::_initHW() {
   #endif
 }
 
+// theme_t is filled by memcpy from a ThemeData, field for field, so the two shapes are one contract: the
+// element table is asserted against ThemeData in themes.h, and this closes the other end of it.
+static_assert(sizeof(theme_t) == sizeof(ThemeData),
+              "theme_t and ThemeData have drifted: a field was added to one and not the other.");
+
 void Config::loadTheme() {
   // Through the registry rather than straight off the table: the id may name a user slot, and it may
   // name a slot whose file has since been deleted.  themeValidId() answers both - it hands back the
@@ -466,11 +483,12 @@ void Config::defaultSettings(const char *val, uint8_t clientId) {
     saveValue(&store.layoutId, (uint8_t)0);
     saveValue(&store.systemFontId, (uint8_t)DISPLAYFONT);
     saveValue(&store.clockFontId, (uint8_t)CLOCKFONT);
+    saveValue(&store.pretextALLCAPS, (bool)PRETEXT_ALLCAPS);
     saveValue(&store.numplaylist, (bool)NUMBERED_PLAYLIST);
     saveValue(&store.playlistPages, (bool)PLAYLIST_MODE_PAGED);
     saveValue(&store.clock12, (bool)CLOCK_TWELVE);
     saveValue(&store.clockglow, (bool)CLOCKGLOW);
-    saveValue(&store.pretextALLCAPS, (bool)PRETEXT_ALLCAPS);
+    saveValue(&store.digitsglow, (bool)DIGITSGLOW);
     saveValue(&store.volumepage, (bool)VOLUME_PAGE);
     saveValue(&store.bufferbar, (bool)SHOW_BUFFERBAR);
     saveValue(&store.vumeter, (bool)SHOW_VU_METER);
@@ -482,6 +500,13 @@ void Config::defaultSettings(const char *val, uint8_t clientId) {
     store.dspon = true;  // runtime state only: the display is always on at boot/reset, never restored from NVS
     store.brightness = (uint8_t)SCREEN_BRIGHTNESS; setBrightness(false);
     backlightControls.restart();
+    // One screen update
+    display.applyFonts((uint8_t)DISPLAYFONT, (uint8_t)CLOCKFONT);
+    netserver.requestOnChange(GETACTIVE, 0);
+    netserver.requestOnChange(GETSCREEN, clientId);
+    return;
+  }
+  if (strcmp(val, "screensaver") == 0) {
     saveValue(&store.screensaverEnabled, (bool)SS_NOTPLAYING);
     saveValue(&store.screensaverBlank, (bool)SS_NOTPLAYING_BLANK);
     saveValue(&store.screensaverTimeout, (uint16_t)SS_NOTPLAYING_TIME);
@@ -489,14 +514,20 @@ void Config::defaultSettings(const char *val, uint8_t clientId) {
     saveValue(&store.screensaverPlayingBlank, (bool)SS_PLAYING_BLANK);
     saveValue(&store.screensaverPlayingTimeout, (uint16_t)SS_PLAYING_TIME);
     saveValue(&store.screensaverFullDateTime, (bool)SS_FULL_DATETIME);
-    saveValue(&store.screensaverText, (bool)SS_TEXT);
+    saveValue(&store.screensaverText, (bool)SS_INFO_TEXT);
+    saveValue(&store.screensaverClockSmaller, (bool)SS_SMALLER_CLOCK);
     saveValue(&store.screensaverVU, (bool)SS_VU);
     saveValue(&store.screensaverVUStyle, (uint8_t)SS_VU_STYLE);
     saveValue(&store.screensaverVUpeak, (bool)SS_VUPEAK);
-    // One screen update
-    display.applyFonts((uint8_t)DISPLAYFONT, (uint8_t)CLOCKFONT);
+    saveValue(&store.sleeptimer, (bool)SS_SLEEPTIMER);
+    saveValue(&store.sleepSsTimeout, (uint16_t)SS_SLEEPTIME);
+    sleepTicks = 0;
+    if (isScreensaver) {
+      const bool blank = player.isRunning() ? store.screensaverPlayingBlank : store.screensaverBlank;
+      display.putRequest(SSREBUILD, blank ? SCREENBLANK : SCREENSAVER);
+    }
     netserver.requestOnChange(GETACTIVE, 0);
-    netserver.requestOnChange(GETSCREEN, clientId);
+    netserver.requestOnChange(GETSCREENSAVER, clientId);
     return;
   }
   if (strcmp(val, "locale") == 0) {
@@ -569,6 +600,7 @@ void Config::defaultSettings(const char *val, uint8_t clientId) {
     defaultSettings("system", clientId);
     defaultSettings("mqtt", clientId);
     defaultSettings("battery", clientId);
+    defaultSettings("screensaver", clientId);
     defaultSettings("screen", clientId); // at the end to make sure screen doesn't break...
     return;
   }
@@ -732,6 +764,13 @@ uint8_t Config::irAction(uint8_t button) {
   return (button < irKeyMapCount) ? irKeyMap[button].action : 0xFF;  // 0xFF = unknown button
 }
 #endif // IR_PIN!=255
+
+// The screensaver and sleep countdowns always restart together
+void Config::resetScreensaverTimers(uint16_t value) {
+  screensaverTicks = value;
+  screensaverPlayingTicks = value;
+  sleepTicks = value;
+}
 
 void Config::processDeferredSaves() {
   for (uint8_t i = 0; i < DEFERRED_SAVE_SLOTS; ++i) {
@@ -1050,9 +1089,14 @@ const configKeyMap Config::keyMap[] = {
   CONFIG_KEY_ENTRY(systemFontId, "sysfont"),
   CONFIG_KEY_ENTRY(clockFontId, "clockfont"),
   CONFIG_KEY_ENTRY(clockglow, "clockglow"),
+  CONFIG_KEY_ENTRY(digitsglow, "digitsglow"),
   CONFIG_KEY_ENTRY(playlistPages, "plpaged"),
   CONFIG_KEY_ENTRY(pretextALLCAPS, "allcaps"),
   CONFIG_KEY_ENTRY(brightness, "bright"),
+  CONFIG_KEY_ENTRY(dimmingEnabled, "dimmingen"),
+  CONFIG_KEY_ENTRY(dimmingTimeout, "dimmingto"),
+  CONFIG_KEY_ENTRY(dimmingBrightness, "dimmingbr"),
+  // Screensaver
   CONFIG_KEY_ENTRY(screensaverEnabled, "scrnsvren"),
   CONFIG_KEY_ENTRY(screensaverBlank, "scrnsvrbl"),
   CONFIG_KEY_ENTRY(screensaverTimeout, "scrnsvrto"),
@@ -1061,12 +1105,12 @@ const configKeyMap Config::keyMap[] = {
   CONFIG_KEY_ENTRY(screensaverPlayingTimeout, "scrnsvrplto"),
   CONFIG_KEY_ENTRY(screensaverFullDateTime, "scrnsvrfull"),
   CONFIG_KEY_ENTRY(screensaverText, "scrnsvrtext"),
+  CONFIG_KEY_ENTRY(screensaverClockSmaller, "sssmaller"),
   CONFIG_KEY_ENTRY(screensaverVU, "scrnsvrvu"),
   CONFIG_KEY_ENTRY(screensaverVUStyle, "scrnsvrvustyle"),
   CONFIG_KEY_ENTRY(screensaverVUpeak, "scrnsvrvupeak"),
-  CONFIG_KEY_ENTRY(dimmingEnabled, "dimmingen"),
-  CONFIG_KEY_ENTRY(dimmingTimeout, "dimmingto"),
-  CONFIG_KEY_ENTRY(dimmingBrightness, "dimmingbr"),
+  CONFIG_KEY_ENTRY(sleeptimer, "sleeptimer"),
+  CONFIG_KEY_ENTRY(sleepSsTimeout, "sleepsstimeout"),
   // Locale
   CONFIG_KEY_ENTRY(locale_webui, "localewebui"),
   CONFIG_KEY_ENTRY(locale_display, "localedsp"),

@@ -326,6 +326,8 @@ function onMessage(event) {
         if (volSlider) { volSlider.max = data.maxVol; fillSlider(volSlider); }
       }
       Object.keys(data).forEach(key=>{
+        // The Settings page is the only place that asks for GETSCREEN, so its reply also carries the stored theme id: apply it here
+        if (key === 'themeId') document.documentElement.setAttribute('data-theme', data[key]);
         setupElement(key, data[key]);
       });
     }
@@ -371,7 +373,7 @@ function fillSlider(sl){
   const slaveid = sl.dataset.slaveid;
   const value = (sl.value-sl.min)/(sl.max-sl.min)*100;
   if(slaveid) getId(slaveid).innerText=sl.value;
-  sl.style.background = 'linear-gradient(to right, var(--accent-dark) 0%,  var(--accent-dark) ' + value + '%, var(--odd-bg-color) ' + value + '%, var(--odd-bg-color) 100%)';
+  sl.style.background = 'linear-gradient(to right, var(--meter-fill) 0%,  var(--meter-fill) ' + value + '%, var(--meter-track) ' + value + '%, var(--meter-track) 100%)';
 }
 function setupElement(id,value){
   // handle bitrate/codec specially
@@ -1207,9 +1209,9 @@ var validatorMode = false;
 var validatorRunning = false;
 var GEAR_ICON = null;
 var ICON_EDITOR =
-  '<svg viewBox="0 0 48 48" class="stroke"><path stroke-width="4" stroke-linecap="round" stroke-linejoin="round" d="M5 10L8 13L14 7 M5 24L8 27L14 21 M5 38L8 41L14 35 M21 24H43 M21 38H43 M21 10H43"/></svg>';
-var ICON_VALIDATOR =
   '<svg viewBox="0 0 24 24" class="stroke"><path stroke-width="2" d="M20,15 C19,16 21.25,18.75 20,20 C18.75,21.25 16,19 15,20 C14,21 13.5,23 12,23 C10.5,23 10,21 9,20 C8,19 5.25,21.25 4,20 C2.75,18.75 5,16 4,15 C3,14 1,13.5 1,12 C1,10.5 3,10 4,9 C5,8 2.75,5.25 4,4 C5.25,2.75 8,5 9,4 C10,3 10.5,1 12,1 C13.5,1 14,3 15,4 C16,5 18.75,2.75 20,4 C21.25,5.25 19,8 20,9 C21,10 23,10.5 23,12 C23,13.5 21,14 20,15 Z M7,12 L10,15 L17,8"/></svg>';
+var ICON_VALIDATOR =
+  '<svg viewBox="0 0 48 48" class="stroke"><path stroke-width="4" stroke-linecap="round" stroke-linejoin="round" d="M5 10L8 13L14 7 M5 24L8 27L14 21 M5 38L8 41L14 35 M21 24H43 M21 38H43 M21 10H43"/></svg>';
 
 function pleditorOpen(){
   const w = getId('pleditorwrap');
@@ -1316,10 +1318,9 @@ function submitWiFi(){
     xhr.open("POST",`http://${hostname}/upload`,true);
     xhr.send(formData);
     fileuploadinput.value = '';
-    getId("settingscontent").innerHTML='<h2>'+t('msg_settings_saved', 'Settings saved. Rebooting...')+'</h2>';
-    getId("settingsdone").classList.add("hidden");
-    getId("navigation").classList.add("hidden");
-    setTimeout(function(){ window.location.href=`http://${hostname}/`; }, 10000);
+    // The device imports the file and restarts, so poll /ready like every other reboot rather than guessing a
+    // fixed delay: the page comes back the moment the startup services are up, and never sooner.
+    rebootSystem(t('msg_settings_saved', 'Settings saved. Rebooting...'));
   }
 }
 function playItem(target){
@@ -1368,6 +1369,14 @@ function playPreview(root) {
   
   sendStationAction(stationName, streamUrl, false);
 }
+/* A touch screen never fires :hover, so a button carrying .hold keeps its hover colours for a moment after the
+   press - long enough to be seen, short enough not to become a permanent highlight.  A second press restarts it. */
+const HOLD_MS = 2000;
+function holdPressed(el){
+  el.classList.add('pressed');
+  clearTimeout(el.holdTimer);
+  el.holdTimer = setTimeout(function(){ el.classList.remove('pressed'); }, HOLD_MS);
+}
 function continueLoading(mode){
   if(typeof mode === 'undefined' || loaded) return;
   if(mode=="player"){
@@ -1410,6 +1419,7 @@ function continueLoading(mode){
           }
           websocket.send('getsystem=1');
           websocket.send('getscreen=1');
+          websocket.send('getscreensaver=1');
           websocket.send('getlocale=1');
           websocket.send('getweather=1');
           websocket.send('getmqtt=1');
@@ -1471,7 +1481,14 @@ function continueLoading(mode){
     if(target.id === 'dangerzone_sw2') { toggleDangerZoneSwitch('dangerzone_sw2'); event.preventDefault(); event.stopPropagation(); return; }
     if(target.id === 'dangerzone_sw3') { toggleDangerZoneSwitch('dangerzone_sw3'); event.preventDefault(); event.stopPropagation(); return; }
     let command = target.dataset.command;
+    // The holder may be a wrapper - a button's label is often a div of its own - so a press that lands on a plain
+    // child still resolves to the element that carries the command.
+    if (!command) {
+      const holder = target.closest('[data-command]');
+      if (holder) { target = holder; command = holder.dataset.command; }
+    }
     if (command){
+      if (target.classList.contains('hold')) holdPressed(target);
       if(target.classList.contains("local")){
         switch(command){
           case "toggle": toggleTarget(target, target.dataset.target); break;
@@ -1489,6 +1506,8 @@ function continueLoading(mode){
           case "plundo": undoPlaylistChanges(); break;
           case "plshare": sharePlaylist(); break;
           case "fwupdate": window.location.href=`http://${hostname}/update.html`; break;
+          // In a new tab: the editor is used beside the settings page, and the device serves both from one server
+          case "editor": window.open(`http://${hostname}/editor.html`, '_blank'); break;
           case "webboard": window.location.href=`http://${hostname}/webboard`; break;
           case "setupir": window.location.href=`http://${hostname}/ir.html`; break;
           case "search": window.location.href=`http://${hostname}/search.html`; break;
@@ -1504,7 +1523,7 @@ function continueLoading(mode){
           case "confirm-reboot": showDangerConfirm('dz_reboot'); break;
           case "confirm-format": showDangerConfirm('dz_format'); break;
           case "confirm-reset": showDangerConfirm('dz_reset'); break;
-          case "reboot": websocket.send("reboot=1"); rebootSystem(t('msg_rebooting', 'Rebooting...'), 30, true); break;
+          case "reboot": websocket.send("reboot=1"); rebootSystem(t('msg_rebooting', 'Rebooting...')); break;
           case "format": websocket.send("format=1"); rebootSystem(t('msg_format_reboot', 'Format LittleFS. Rebooting...'), 0, false); break;
           case "reset":  websocket.send("reset=1"); getId("settingscontent").innerHTML=`<h2>${t('msg_reset', 'Settings reset.')}</h2>`; setTimeout(() => location.reload(), 2000); break;
           case "shuffle": toggleShuffle(); break;

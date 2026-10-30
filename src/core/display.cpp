@@ -30,8 +30,10 @@
 #include "battery.h"
 
 extern const char batterytxtFmt[] PROGMEM;
-static constexpr uint32_t DSP_TASK_DELAY = 10;   // ms; minimum sleep between display iterations
+static constexpr uint32_t DSP_TASK_DELAY = 10;  // ms; minimum sleep between display iterations
 static constexpr uint32_t DSQ_SEND_DELAY = 200;  // ms; xQueueSend timeout in display.putRequest()
+static constexpr uint32_t DSQ_CRITICAL_WAIT = 2000;  // ms; how long SDINDEXSTART/SDINDEXDONE keep retrying a full queue
+static constexpr uint32_t SS_LINE_HOLD_MS = 3000;  // ms; How long the screensaver's info line stays blank after a track change
 
 // These three flags are per-layout booleans in LayoutData now, not per-model macros.
 
@@ -193,6 +195,18 @@ static void hideWeatherIfChanged(Widget* w, bool hide) {
   if (hide) { w->lock(true); w->setActive(false); }
   else      { w->lock(false); w->setActive(true); }   // re-show draws the text setText() kept recording
 }
+
+// The footer's pair is the same hide as the weather's - a lock alone leaves a TextWidget painting from
+// setText() - but the SHOW is unlock() ALONE: _applyFooter() runs before the page switch, whose own pass
+// activates and draws every widget on the page, and drawing here would paint the footer over the dialog page
+// for the instant before that switch.
+static void showOrHideFooterWidget(Widget* w, bool show) {
+  if (!w) return;
+  if (show) { w->unlock(); return; }
+  if (w->locked() && !w->isActive()) return;
+  w->lock(true);
+  w->setActive(false);
+}
 #endif
 
 QueueHandle_t displayQueue;
@@ -248,6 +262,11 @@ static uint32_t normalizeBufferbarValue(uint32_t rawValue, uint32_t maxValue) {
 static inline bool moveZeroed(const MoveConfig& m) { return m.x == 0 && m.y == 0 && m.width == 0; }
 static inline void applyMove(Widget* w, const MoveConfig& m) {
   if (!w || moveZeroed(m)) return;
+  // A move that names the position the conf ALREADY gives this widget is a no-op, not a repaint: the confs write
+  // their own numbers to say "this state leaves the line alone", and moving it to where it is costs an erase and
+  // a redraw over identical pixels - a visible tear on a panel that writes as slowly as this one.  See
+  // Widget::moveIsNoop().
+  if (w->moveIsNoop(m)) return;
   w->moveTo(m);
 }
 
@@ -369,13 +388,24 @@ uint16_t Display::height() { return dsp.height(); }
 void Display::_bootScreen() {
   _boot = new Page();
   // The dots run between a pinned speaker and the boot glyph - see ProgressWidget::_progress().  startup.icon()
-  // is read here, while the boot screen is built, and the widget keeps the literal for the session.
-  _boot->addWidget(new ProgressWidget(_bootConfig.bootWdtConf, _bootConfig.bootPrgConf, BOOT_PRG_COLOR, 0,
-                                      "\023", startup.icon()));
+  // is read here, while the boot screen is built, and the widget keeps the literal for the session.  The blob takes
+  // BOOT_DOT_COLOR, which defaults to BOOT_PRG_COLOR: the two frame glyphs keep the latter, so a build that sets the
+  // pair differently gets a two-tone line and every other build is unchanged.
+  ProgressWidget* bootDots = new ProgressWidget(_bootConfig.bootWdtConf, _bootConfig.bootPrgConf,
+                                                BOOT_PRG_COLOR, 0, "\023", startup.icon());
+  bootDots->setDotColor(BOOT_DOT_COLOR);
+  _boot->addWidget(bootDots);
   // A ScrollWidget fed from bootstrConf's plain WidgetConfig: text that fits is drawn at the conf's align
-  // (so WA_CENTER still rules), a longer string parks at the edge and scrolls.  Only the scroll fields are derived.
+  // (so WA_CENTER still rules), a longer string parks at the span's edge and scrolls.  Only the scroll fields are
+  // derived.
   ScrollConfig bootScroll;
-  bootScroll.widget = _bootConfig.bootstrConf;  // offset, top, textsize and align straight from the conf
+  bootScroll.widget = _bootConfig.bootstrConf;  // top, textsize and align straight from the conf
+  // `offset` is the span's LEFT EDGE, not a margin (see WidgetConfig::offset), and it is dead in the plain centred
+  // widget this conf is declared as - which is why every conf leaves it 0.  It goes live the moment the line
+  // becomes a scroll, so centring inside [0, MAX_WIDTH) put the text one TFT_BORDER left of the glass: a character
+  // or two at the boot sizes, and the only line on the boot screen that was off.  The span is MAX_WIDTH wide, so
+  // its edge is the border inset itself.
+  bootScroll.widget.offset = TFT_BORDER;
   bootScroll.width = MAX_WIDTH;
   // The cadence is borrowed from the panel's own message line rather than hardcoded: apSettConf is the same
   // species of line and its step and scrolltime are tuned per panel.  Only these three fields are taken, and a
@@ -387,7 +417,7 @@ void Display::_bootScreen() {
   // BOOTSTR_LEN, not the widget default: this line's window is its own budget, sized for a locale label, a
   // 32 character SSID and the icon pair.
   _bootstring = (TextWidget*) &_boot->addWidget(new ScrollWidget(bootScroll, BOOT_TXT_COLOR, 0, BOOTSTR_LEN));
-  _bootstring->setText(RADIOVERSION);
+  _bootstring->setText(""); // empty until player.init happens
   _pager->addPage(_boot);
   _pager->setPage(_boot, true);
   dsp.drawLogo(BOOTLOGOTOP);
@@ -485,9 +515,12 @@ void Display::_buildPager() {
   pages[PG_DIALOG]->addWidget(_nums);
     // scrolling update/validate label and progress bar.  Built in every build - the online update drives it,
     // and so does the playlist validator.
-    // copy apSettConf scroll params but center position on dialog page
+    // Copy apSettConf's scroll params, but centre on the GLASS.  A WA_CENTER line centres inside its span, and
+    // that span starts at `offset`, so zeroing offset while keeping the conf's inset width left the label one
+    // border left of centre - the same rule the boot line below now honours.  Centre the span itself, whatever
+    // width this panel's apSettConf asks for.
     ScrollConfig updConf = _bootConfig.apSettConf;
-    updConf.widget.offset = 0;
+    updConf.widget.offset = (dsp.width() > updConf.width) ? (uint16_t)((dsp.width() - updConf.width) / 2) : 0;
     updConf.widget.align = WA_CENTER;
     updConf.widget.top = (dsp.height() - (updConf.widget.textsize * CHARHEIGHT)) / 2;
     updConf.widget.top = max<int16_t>(0, updConf.widget.top - CHARHEIGHT);
@@ -531,6 +564,7 @@ void Display::_buildPager() {
 }
 
 void Display::_apScreen() {
+  dsp.setScrollId(NULL);   // the page below may own the slot, and its widget is about to be deleted
   if (_boot) {
     _pager->removePage(_boot);
     _boot = nullptr;
@@ -569,6 +603,7 @@ void Display::_apScreen() {
 #ifdef USE_SD
 // The SD File Manager's screen: the address to open on one line, and how long the device will keep the mode open
 void Display::_sdmanScreen() {
+  dsp.setScrollId(NULL);   // the page below may own the slot, and its widget is about to be deleted
   if (_boot) {
     _pager->removePage(_boot);
     _boot = nullptr;
@@ -612,7 +647,21 @@ void Display::sdmanCountdown() {
 }
 #endif
 
+// The IP line's format, from the conf's iptxtFmt with the card pair swapped in where the conf draws its own mark.
+// \030\031 is a SUBSTITUTE for that mark, not decoration, so it only goes where the mark exists: a conf that spells
+// its line without one keeps its own format, and a conf whose format is empty keeps the line blank - that layout has
+// given the row away and nothing here may put text back on it.  sd=true is the line standing in for the card (SD
+// playback mode, and every SDOFFLINE write); false is the address with the WebUI up.  The two spellings cost the
+// same width: \021\022 is the web mode icon in two glyph cells, and \030\031 is the card in two.
+static const char* ipLineFmt(bool sd) {
+  static const char sdFmt[] PROGMEM = "\030\031%s";
+  if (!sd) return iptxtFmt;
+  // Short-circuit matters here: the empty format is one byte long, so [1] is only read once [0] has matched.
+  return (iptxtFmt[0] == '\021' && iptxtFmt[1] == '\022') ? sdFmt : iptxtFmt;
+}
+
 void Display::_start() {
+  dsp.setScrollId(NULL);   // the boot page may own the slot, and its widget is about to be deleted
   if (_boot) {
     _pager->removePage(_boot);
     _boot = nullptr;
@@ -640,7 +689,7 @@ void Display::_start() {
     config.setTitle(l10n(L10N_MSG_READY));
   #endif
   
-  if (_bufferbar)  _bufferbar->lock(!bufferbarInLayout() || !editorOpt(config.store.bufferbar));
+  if (_bufferbar)  lockIfChanged(_bufferbar, !bufferbarInLayout() || !editorOpt(config.store.bufferbar));
   
   hideWeatherIfChanged(_weather, _weatherHidden());
   if (_weather && weatherLive() && network.status != SDOFFLINE) network.buildWeatherString();
@@ -651,7 +700,9 @@ void Display::_start() {
     if (_clock->locked()) _clock->clear();
   }
 
-  if (_vuwidget) _vuwidget->lock();
+  // A direct lock() here re-cleared the meter's box on every boot path that had already locked it in
+  // _applyState(); lockIfChanged() is the one owner of "only a state change may erase".
+  if (_vuwidget) lockIfChanged(_vuwidget, true);
   if (_rssi) { if (network.status == SDOFFLINE) _setRSSI(0); else _setRSSI(WiFi.RSSI()); }
   // shareBattRSSI toggles _active to pick between RSSI and battery - a re-show site, hence the predicate.
   if (*shareBattRSSI_ptr && _battery && _rssi) {
@@ -667,7 +718,7 @@ void Display::_start() {
   if (ipInLayout()) {
     if (_volip) {
       if (network.status == SDOFFLINE) {
-        _volip->setText(utf8_trim15(l10n(L10N_MSG_OFFLINE_15CHAR)), "\030\031%s");
+        _volip->setText(utf8_trim15(l10n(L10N_MSG_OFFLINE_15CHAR)), ipLineFmt(true));
       } else {
         if (*shareWeatherIP_ptr && weatherLive()) _volip->setText("");
         else _footerIp();
@@ -684,16 +735,34 @@ void Display::_start() {
   _bootStep = 2;
 }
 
+// Which of the footer's widgets the current screen keeps.  The player page owns the footer and the volume page
+// is the only dialog that borrows all of it on purpose; every other screen on the dialog page - a number, an
+// update, a validator run, a plain dialog - is itself and nothing else.
+uint8_t Display::_footerMask() const {
+  return (_mode == PLAYER || _mode == VOL) ? FW_ALL : 0;
+}
+
+void Display::_applyFooter() {
+  static const uint8_t bit[] = { FW_VOLBAR, FW_BUFBAR, FW_VOLTXT, FW_VOLIP, FW_BATT, FW_RSSI };
+  Widget* const w[]          = { _volbar,   _bufferbar, _voltxt,    _volip,    _battery, _rssi };
+  const uint8_t keep = _footerMask();
+  for (uint8_t i = 0; i < sizeof(w) / sizeof(w[0]); i++) showOrHideFooterWidget(w[i], (keep & bit[i]) != 0);
+}
+
 // The footer IP, written in one place.  It is the user's indicator that the WebUI is up.
 void Display::_footerIp() {
-  if (!_volip) return;
+  if (!_volip || !_footerShown(FW_VOLIP)) return;
   if (!netserver.isListening()) { _volip->setText(""); return; }
-  _volip->setText(utility.ipToStr(WiFi.localIP()), iptxtFmt);
+  _volip->setText(utility.ipToStr(WiFi.localIP()), ipLineFmt(config.getMode() == PM_SDCARD));
 }
 
 void Display::_showDialog(const char *title) {
   dsp.setScrollId(NULL);
   _pager->setPage(pages[PG_DIALOG]);
+  // A dialog has no number, and the widget keeps whatever the last screen left in it - leaving the volume page
+  // for Settings, or the station entry for a LOST dialog, would otherwise draw that value behind the title.
+  // The number screens set theirs immediately after this call, which is what makes it safe for them too.
+  if (_nums) _nums->setText("");
   _meta->setAlign(WA_CENTER);
   _meta->setText(title);
 }
@@ -705,22 +774,27 @@ void Display::_showDialog(const char *title) {
 // header on the meta line.  false is the volume overlay - the number is drawn over the live player page, where the
 // row tidy-up below is what keeps it legible.  A negative value blanks the widget, which is how the card-change
 // screen starts before its counter exists (SDFILEINDEX fills it in later). */
-void Display::_showNumbers(const char* header, int32_t value, const char* fmt, bool dialogPage) {
+void Display::_showNumbers(const char* header, int32_t value, const char* fmt, bool dialogPage, uint32_t fieldmax) {
   // The shared rows first, in both variants: several layouts put the number on a row the weather, IP, battery or
   // RSSI line normally uses, and those widgets draw themselves on request rather than through the page pass.
+  // The footer is NOT handled here: _applyFooter() settled it when the mode changed, so this only has to leave
+  // those rows alone on a screen that keeps them (the volume page and the overlay).
   if (*shareWeatherIP_ptr && weatherLive() && _weather) {
-    _weather->lock(true);   // pause weather updates while the number is up, so it cannot overwrite the IP line
+    // pause weather updates while the number is up, so it cannot overwrite the IP line
+    lockIfChanged(_weather, true);
     _weather->setText("");
   }
   if (*shareBattRSSI_ptr && _battery && _rssi) {
     _battery->setText(""); _battery->setActive(false);
-    _rssi->setActive(rssiInLayout());
+    _rssi->setActive(_footerShown(FW_RSSI) && rssiInLayout());
   }
   if (dialogPage) _showDialog(header);
-  if (_volip) {
-    if (network.status == SDOFFLINE) _volip->setText(utf8_trim15(l10n(L10N_MSG_OFFLINE_15CHAR)), "\030\031%s");
+  if (_volip && _footerShown(FW_VOLIP)) {
+    if (network.status == SDOFFLINE) _volip->setText(utf8_trim15(l10n(L10N_MSG_OFFLINE_15CHAR)), ipLineFmt(true));
     else _footerIp();
   }
+  // The zero-pad width: the widest value this screen can show, not the one it happens to be showing.
+  _nums->setFieldMax(fieldmax);
   if (value < 0) _nums->setText("");
   else _nums->setText(value, fmt);
 }
@@ -733,6 +807,16 @@ void Display::_setReturnTicker(uint8_t time_s) {
 void Display::_switchMode(displayMode_e newmode) {
   if (newmode == CLEAR) { dsp.fillScreen(config.theme.background); _mode = CLEAR; return; }
   if (newmode == VOL && !editorOpt(config.store.volumepage)) return;  // no overlay — skip VOL mode to avoid a needless page switch
+  // A re-index of the card OWNS the panel for the whole walk (SDINDEXSTART .. SDINDEXDONE).  Refused HERE rather than
+  // at each sender, because the walk pumps the player for tens of seconds and several paths legitimately queue a
+  // NEWMODE in that window - a play that finally starts, a card-probe resume, a WiFi reconnect, the 30 s return
+  // ticker.  Any of them used to take the scan screen away mid-walk, and because the walk reports its count only
+  // while the mode is SDCHANGE, the counter stopped with the screen.  SDCHANGE itself must pass or the hold could
+  // never be entered; the release is SDINDEXDONE, which clears the flag before it asks for PLAYER.
+  if (_indexHold && newmode != SDCHANGE) {
+    WARNINGLOG("DISPLAY: mode %d refused, the SD index rebuild owns the screen", (int)newmode);
+    return;
+  }
   if (newmode == _mode || (network.status != CONNECTED && network.status != SDOFFLINE)) return;
   #ifdef USE_SD
     // While the SD card manager owns the screen nothing else may take it:  leave() is what asks for it
@@ -740,6 +824,9 @@ void Display::_switchMode(displayMode_e newmode) {
   #endif
   _mode = newmode;
   dsp.setScrollId(NULL);
+  // The footer's visibility is one table keyed off _mode (see _footerMask), and it has to be applied BEFORE the
+  // page switches below: they activate and draw the widgets on the page they show, and a locked widget is skipped.
+  _applyFooter();
   if (newmode == PLAYER) {
     #ifdef USE_SD
       // Tear down the manager's page - and only that page.  The boot and AP screens build the same _boot
@@ -751,20 +838,31 @@ void Display::_switchMode(displayMode_e newmode) {
         _sdmanCountText = nullptr;
       }
     #endif
-    if (player.isRunning()){
+    // Leaving the screensaver settles the clock BEFORE the player page is painted.  The clock is the last
+    // widget _buildPager() adds, so an erase issued after setPage() lands on the freshly drawn page - the
+    // reported "chunk out of the top bar".  Two things have to happen first: the clock has to come back
+    // from the screensaver's random spot, and its feature lock has to be applied, because a yield-to-VU
+    // hide is an erase.  The screensaver page is still up for both, and setPage() clears it on the way out.
+    const bool fromScreensaver = config.isScreensaver;
+    config.isScreensaver = false;
+    // Away from the screensaver the clock's own rung comes back.  Rebuilt before the move, because init()
+    // resets the widget to its conf position and a MOVE applied before it would be lost.
+    if (_clock && clockInLayout()) _clock->refreshSize(*clockConf_ptr);
+    if (fromScreensaver && _clock) _clock->moveBack();
+    if (player.isRunning()) {
       if (vuLive() && _vuwidget) {
         applyMove(_clock, *clockMove_ptr);
         applyMove(_weather, *weatherMoveVU_ptr);
       } else {
-        _clock->moveBack();  // restore from screensaver position
+        if (!fromScreensaver) _clock->moveBack();
         applyMove(_weather, *weatherMove_ptr);
       }
     } else {
-      _clock->moveBack();
+      if (_clock) _clock->moveBack();
       if (_weather) _weather->moveBack();
     }
+    if (_clock) lockIfChanged(_clock, _clockHidden());
     numOfNextStation = 0;
-    config.isScreensaver = false;
     _pager->setPage(pages[PG_PLAYER]);
     // The text goes AFTER the page switch, never before it: setPage() fills the whole panel on its way in,
     // and a scroll widget repaints only from setText() or its own scroll tick - so a line painted first is
@@ -777,9 +875,12 @@ void Display::_switchMode(displayMode_e newmode) {
     // The manager drops the player's state requests while it owns the screen, so widget state is re-derived
     // here, after the page switch, where the draws are wanted again.
     _layoutChange(player.isRunning());
+    // The volume line was cleared on the station and SD screens, and a page switch does not repaint a widget
+    // whose text has not changed - so it is re-rendered here.  Before the IP line, which shares the footer.
+    _updateVolume();
     if (_volip) {
         if (network.status == SDOFFLINE) {
-          _volip->setText(utf8_trim15(l10n(L10N_MSG_OFFLINE_15CHAR)), "\030\031%s");
+          _volip->setText(utf8_trim15(l10n(L10N_MSG_OFFLINE_15CHAR)), ipLineFmt(true));
         } else {
           // weather and IP share the same bottom row; hide IP when weather is active
           if (*shareWeatherIP_ptr && weatherLive()) _volip->setText("");
@@ -788,7 +889,7 @@ void Display::_switchMode(displayMode_e newmode) {
       }
     // force weather repaint on return to PLAYER; larger displays repaint naturally
     if (*shareWeatherIP_ptr && weatherLive() && _weather) {
-      _weather->lock(_weatherHidden());
+      lockIfChanged(_weather, _weatherHidden());
       // Force a clean repaint of the shared weather/IP row after overlays like VOL/SCREENSAVER.
       _weather->setText("");
       if (network.weatherBuf) _weather->setText(network.weatherBuf);
@@ -807,32 +908,32 @@ void Display::_switchMode(displayMode_e newmode) {
     display.putRequest(DBITRATE);  // refresh bitrate badge when returning to player (may have been cleared while on playlist page)
   }
   if (newmode == SCREENSAVER || newmode == SCREENBLANK) {
+    // A fresh entry is not a track change: the strip comes up with whatever the state is now.  _enterScreensaver()
+    // deliberately does NOT clear this - SSREBUILD re-enters through it, and a settings change during the three
+    // seconds must not cancel the hold.
+    _ssHoldUntil = 0;
     config.isScreensaver = true;
     _enterScreensaver(newmode);
   } else {
-    config.screensaverTicks=SCREENSAVERSTARTUPDELAY;
-    config.screensaverPlayingTicks=SCREENSAVERSTARTUPDELAY;
+    // This branch is EVERY mode change to something that is not the screensaver
+    _ssHoldUntil = 0;   // the page the line belongs to is gone, so nothing is held
+    config.resetScreensaverTimers(SCREENSAVERSTARTUPDELAY);
     config.isScreensaver = false;
-    // This branch is EVERY mode change to something that is not the screensaver, so it is both how the clock is
-    // handed back to the player page after the screensaver and - before this - how an ordinary mode change
-    // unlocked it.  The old line here was an unconditional `_clock->lock(false)` under a comment claiming
-    // _clockHidden() would re-lock it, but nothing on this path applies _clockHidden(): _reinitWidgets() and
-    // _layoutChange() are the only sites that do, and a mode change goes through neither.  So a clock whose
-    // layout yields to the VU (`clockMove = { }`) was unlocked here and then painted by its own per-second
-    // draw() - behind the meter and over the weather line, with nothing in the log to say why.  lockIfChanged()
-    // applies the one definition instead, exactly as those two sites do.
+    
     lockIfChanged(_clock, _clockHidden());
   }
   if (newmode == VOL) {
-    _showNumbers(l10n(L10N_LBL_VOLUME), config.store.volume, numtxtFmt, editorOpt(config.store.volumepage));
+    _showNumbers(l10n(L10N_LBL_VOLUME), config.store.volume, numtxtFmt, editorOpt(config.store.volumepage), VOLUME_SCALE);
   }
   if (newmode == LOST)      _showDialog(l10n(L10N_LBL_LOST));
   if (newmode == UPDATING)  { _showDialog(l10n(L10N_LBL_UPDATE)); _updFirstCall = true; }
   if (newmode == VALIDATING) { _showDialog(l10n(L10N_LBL_VALIDATING)); _updFirstCall = true; }
   if (newmode == SLEEPING)  _showDialog(l10n(L10N_LBL_SLEEPING));
-  if (newmode == SDCHANGE)  _showNumbers(l10n(L10N_LBL_WAITFORSD), -1, "%d", true);  // no count yet: SDFILEINDEX fills it in
+  // no count yet: SDFILEINDEX fills it in, and countStation is the last known total - the pre-count or the
+  // previous index - so the counter's zero-fill is as wide as the card needs for most of the walk.
+  if (newmode == SDCHANGE)  _showNumbers(l10n(L10N_LBL_WAITFORSD), -1, "%d", true, config.store.countStation);
   if (newmode == INFO || newmode == SETTINGS || newmode == TIMEZONE || newmode == WIFI) _showDialog("");
-  if (newmode == NUMBERS)   _showNumbers("", -1, "%d", true);   // the header and the number arrive per digit
+  if (newmode == NUMBERS)   _showNumbers("", -1, "%d", true, config.store.countStation);   // the header and the number arrive per digit
   if (newmode == STATIONS) {
     _pager->setPage(pages[PG_PLAYLIST]);
     _plcurrent->setText("");
@@ -851,7 +952,22 @@ void Display::_switchMode(displayMode_e newmode) {
 // change can rebuild the picture without a mode change: that path drops a request for the mode the device is
 // already in, and drops any request at all while the network is transient, and a rebuild needs neither.
 void Display::_enterScreensaver(displayMode_e mode) {
+  // The clock's size index is resolved in its init(), and the screensaver's Smaller Clock option changes it, so the
+  // clock is rebuilt before anything here paints it.  config.isScreensaver is already true on every route in.
+  if (_clock && clockInLayout()) _clock->refreshSize(*clockConf_ptr);
   _screensaverWidgets();        // the widgets are built BEFORE the page switch, so the first pass draws
+                                // the picture the prefs describe, not last time's frame
+  // Place the clock inside the walk area before the page paints.  The layout's position is not on the
+  // walk's map - it can sit inside the info line's strip - and the first timed step waits for
+  // tm_sec % SCREENSAVERMOVE == 0, so without this the clock could overlap the strip for that whole
+  // interval.  moveToQuiet() leaves the panel alone: the page activation below draws the clock at its
+  // new spot, in the widget order that keeps it under the info line and the meter.  With _ssMeterUp the
+  // meter owns the panel and the clock is locked, so there is nothing to place.
+  if (_clock && !_ssMeterUp) {
+    MoveConfig mv;
+    _screensaverClockTarget(mv);
+    _clock->moveToQuiet(mv);
+  }
   _pager->setPage(pages[PG_SCREENSAVER], true);   // the picture the prefs describe, not last time's frame
   if (mode == SCREENBLANK) {
     _clock->clear();
@@ -885,7 +1001,7 @@ void Display::_drawPlaylist() {
 
 void Display::_drawNextStationNum(uint16_t num) {
   _setReturnTicker(30);
-  _showNumbers(utility.stationByNum(num), (int32_t)num, "%d", true);
+  _showNumbers(utility.stationByNum(num), (int32_t)num, "%d", true, config.store.countStation);
 }
 
 void Display::putRequest(displayRequestType_e type, int payload) {
@@ -909,9 +1025,21 @@ void Display::putRequest(displayRequestType_e type, int payload) {
   // Waiting, then dropping, is the deliberate choice for a saturated queue - but silently dropping hides the
   // cause behind whatever ran last.  A full reset queued six requests into a five-deep queue and looked like a
   // battery problem; this line is what tells that story next time (see plans/display-repaint-order.md).
-  if (xQueueSend(displayQueue, &request, pdMS_TO_TICKS(DSQ_SEND_DELAY)) != pdTRUE) {
+  bool sent = xQueueSend(displayQueue, &request, pdMS_TO_TICKS(DSQ_SEND_DELAY)) == pdTRUE;
+  #ifdef USE_SD
+    // The two ends of an index rebuild must not be lost.  A dropped START only costs the scan screen, but a dropped
+    // DONE would leave the panel locked to it: every later mode change refused and the controls inert for the rest of
+    // the run.  So these two wait for the queue instead of dropping - both callers are long operations that already
+    // block for seconds, and neither can run on this task.
+    const uint32_t waitFrom = millis();
+    while (!sent && (type == SDINDEXSTART || type == SDINDEXDONE) && (millis() - waitFrom) < DSQ_CRITICAL_WAIT) {
+      delay(1);
+      sent = xQueueSend(displayQueue, &request, pdMS_TO_TICKS(DSQ_SEND_DELAY)) == pdTRUE;
+    }
+  #endif
+  if (!sent) {
     _droppedRequests++;
-    ERRORLOG("DISPLAY: request %d dropped, queue full (%u so far)", (int)type, (unsigned)_droppedRequests);
+    WARNINGLOG("DISPLAY: request %d dropped, queue full (%u so far)", (int)type, (unsigned)_droppedRequests);
   } else if (type == THEMEPREVIEW) {
     _previewPending = true;
   } else if (type == LAYOUTPREVIEW) {
@@ -1010,24 +1138,26 @@ bool Display::_weatherHidden() {
 }
 
 void Display::_layoutChange(bool played) {
+  // While the screensaver owns the panel the WALK owns the clock's position, and this function must not touch it.
+  const bool ssOwnsPanel = config.isScreensaver;
   if (vuLive() && _vuwidget) {
     if (played) {
       if (_vuwidget) _vuwidget->unlock();
-      applyMove(_clock, *clockMove_ptr);
+      if (!ssOwnsPanel) applyMove(_clock, *clockMove_ptr);
       applyMove(_weather, *weatherMoveVU_ptr);
     } else {
       if (_vuwidget) if (!_vuwidget->locked()) _vuwidget->lock();
-      _clock->moveBack();
+      if (!ssOwnsPanel) _clock->moveBack();
       if (_weather) _weather->moveBack();
     }
   } else {
     if (played) {
-      _clock->moveBack();  // restore clock from VU-shifted position
+      if (!ssOwnsPanel) _clock->moveBack();  // restore clock from VU-shifted position
       applyMove(_weather, *weatherMove_ptr);
       //_clock->moveBack();
     } else {
       if (_weather) _weather->moveBack();
-      _clock->moveBack();
+      if (!ssOwnsPanel) _clock->moveBack();
     }
   }
   // Lock state last, from one definition.  lock() erases for every class that implements _clear() - the
@@ -1089,6 +1219,12 @@ void Display::loop() {
     if (xQueueSend(displayQueue, &deferred, 0) == pdTRUE) _deferredType = NOPE;
   }
   if (displayQueue==NULL || _locked) return;
+  // A held info line comes back on its own.  The requests that would have repainted it were refused, and nothing is
+  // guaranteed to arrive at the deadline, so this tick restores it - once, from the state as it then stands.
+  if (_ssHoldUntil && (int32_t)(millis() - _ssHoldUntil) >= 0) {
+    _ssHoldUntil = 0;
+    if (config.isScreensaver) _screensaverLine();
+  }
   _pager->loop();
   requestParams_t request;
   if (xQueueReceive(displayQueue, &request, DSP_QUEUE_TICKS)) {
@@ -1130,7 +1266,15 @@ void Display::loop() {
             _time(request.payload);
           break;
         case NEWTITLE: _title(); break;
-        case NEWSTATION: _station(); break;
+        case NEWSTATION:
+          // An SD track change is announced by the new track's station name, queued by _play() BEFORE it opens the
+          // file - so this hold is already up when handleBeginSdRead() clears the title, which is the moment the
+          // weather would otherwise take the strip.  Only while the screensaver owns the panel: that is the only
+          // place the line exists, and a manual skip has already left the screensaver by the time this is handled
+          // (screenSaverExit() queues its mode change first), so only an EOF advance is held.
+          if (config.isScreensaver) _ssHoldLine(SS_LINE_HOLD_MS);
+          _station();
+          break;
         case NEXTSTATION: _drawNextStationNum(request.payload); break;
         case DRAWPLAYLIST: _drawPlaylist(); break;
         case DRAWVOL: _volume(); break;
@@ -1139,13 +1283,18 @@ void Display::loop() {
           _applyBitrate();
           break;
         case SHOWBUFFERBAR: if (_bufferbar)  {
-            _bufferbar->lock(!bufferbarInLayout() || !editorOpt(config.store.bufferbar));
+            lockIfChanged(_bufferbar, !_footerShown(FW_BUFBAR) || !bufferbarInLayout()
+                                      || !editorOpt(config.store.bufferbar));
             _bufferbar->setValue(normalizeBufferbarValue(player.inBufferFilled(), _bufferbarMax));
           }
           break;
         case SHOWVUMETER: {
           if (_vuwidget) {
-            _vuwidget->lock(!vuDraws());
+            // An unchanged lock state must not erase.  While stopped vuDraws() is false in BOTH toggle
+            // directions, so a plain lock(true) re-cleared the meter's box over the clock - the reported
+            // bite - and nothing repainted the clock because it had never been hidden.  lockIfChanged()
+            // is the one owner of the rule (see its definition); _layoutChange() handles the repaint.
+            lockIfChanged(_vuwidget, !vuDraws());
             _layoutChange(player.isRunning());
           }
           break;
@@ -1154,7 +1303,7 @@ void Display::loop() {
           hideWeatherIfChanged(_weather, _weatherHidden());
           if (!weatherLive()) {
             if (_weather) _weather->setText("");
-            _footerIp();
+            _footerIp();   // it bails on a screen that does not keep the IP line
           } else {
             // weather and IP share a row; suppress weather text and IP together based on mode
             if (*shareWeatherIP_ptr) {
@@ -1207,12 +1356,29 @@ void Display::loop() {
           if (_bootstring) _bootstring->setText(l10n(L10N_MSG_SCANNING_WIFI));
           break;
         }
+        case BOOTVSPATCH: {
+          if (_bootstring) _bootstring->setText("VS1053");
+          break;
+        }
+        case BOOTVERSION: {
+          if (_bootstring) _bootstring->setText(RADIOVERSION);
+          break;
+        }
+        #ifdef USE_SD
+        // The two ends of a re-index that is not the boot scan: the File Manager's close-time walk.  START is queued
+        // before that walk asks for SDCHANGE, so the hold is up before anything else can ask for the screen, and DONE
+        // releases it AND returns to the player in one display-task action.  That pairing is the whole reason the flag
+        // lives on this task: an out-of-task flag would still be set when this task processed the walk's own final
+        // PLAYER request, and the guard above would then refuse its own exit.
+        case SDINDEXSTART: _indexHold = true; break;
+        case SDINDEXDONE:  _indexHold = false; _switchMode(PLAYER); break;
+        #endif
         case SDFILEINDEX: {
           if (_mode == SDCHANGE) _nums->setText(request.payload, "%d");
           break;
         }
         case DSPRSSI:
-          if (_rssi) { _setRSSI(request.payload); }
+          if (_rssi && _footerShown(FW_RSSI)) { _setRSSI(request.payload); }
           if (_bufferbar && editorOpt(config.store.bufferbar)) {
             _bufferbar->setValue(normalizeBufferbarValue(player.isRunning() ? player.inBufferFilled() : 0, _bufferbarMax));
           }
@@ -1225,9 +1391,9 @@ void Display::loop() {
         case PSTOP:  _layoutChange(false);  break;
         case DSP_START: _start();  break;
         case NEWIP: {
-          if (_volip) {
+          if (_volip && _footerShown(FW_VOLIP)) {   // a screen without the footer has no IP line to refresh
               if (network.status == SDOFFLINE) {
-                _volip->setText(utf8_trim15(l10n(L10N_MSG_OFFLINE_15CHAR)), "\030\031%s");
+                _volip->setText(utf8_trim15(l10n(L10N_MSG_OFFLINE_15CHAR)), ipLineFmt(true));
               } else {
                 // skip IP repaint in PLAYER when weather owns the shared row
                 if (!*shareWeatherIP_ptr || !(_mode == PLAYER && weatherLive()))
@@ -1354,6 +1520,21 @@ char *split(char *str, const char *delim) {
   return dmp + strlen(delim);
 }
 
+// A title that came from a FILENAME carries its extension; one that came from a tag never does.  Stripping a known
+// audio suffix in place is therefore safe and is what stops the second title line reading "Nothingman.mp3" on a card
+// whose files have no readable tags (ID3v1 lives at the end of the file and is only read when the track ends).
+static void stripAudioExtension(char* s) {
+  static const char* const ext[] = { ".mp3", ".flac", ".ogg", ".opus", ".m4a", ".m4b", ".aac", ".wav", ".mp4" };
+  const size_t n = strlen(s);
+  for (size_t i = 0; i < sizeof(ext) / sizeof(ext[0]); ++i) {
+    const size_t e = strlen(ext[i]);
+    if (n <= e) continue;
+    size_t k = 0;
+    while (k < e && tolower((unsigned char)s[n - e + k]) == ext[i][k]) ++k;
+    if (k == e) { s[n - e] = '\0'; return; }
+  }
+}
+
 // config.station.title arrives as "artist - song" and the layout has two title lines for it.  Both the
 // player page and the screensaver's info line want the two halves, so the rule lives here rather than in
 // either caller.  False when there is no title at all; otherwise `first` is the whole string with
@@ -1362,9 +1543,27 @@ static bool splitTitle(char* dst, size_t dstSize, char*& first, char*& second) {
   first = second = nullptr;
   if (!config.station.title[0]) return false;
   strlcpy(dst, config.station.title, dstSize);
+  stripAudioExtension(dst);
+  if (!dst[0]) return false;
   second = split(dst, " - ");
   first = dst;
   return true;
+}
+
+// Would the station name only repeat what the two title halves already say?  An untagged SD file's name IS its
+// filename, and title1/title2 are that filename cut at its first " - " (see splitTitle()), so joining them back with
+// the same separator reproduces it exactly.  Extension-stripped and case-insensitive, because one side is a filesystem
+// name and the other came back through the audio library's tag path.  The inverse of splitTitle(), which is why it
+// lives here.  See plans/screensaver-line-duplicate-name.md.
+static bool nameRepeatsTitle(const char* name, const char* t1, const char* t2) {
+  if (!name || !name[0] || !t1 || !t1[0]) return false;
+  char joined[STATION_FIELD_LENGTH];
+  if (t2 && t2[0]) snprintf(joined, sizeof(joined), "%s - %s", t1, t2);
+  else             strlcpy(joined, t1, sizeof(joined));
+  char stripped[STATION_FIELD_LENGTH];
+  strlcpy(stripped, name, sizeof(stripped));
+  stripAudioExtension(stripped);
+  return stripped[0] && strcasecmp(stripped, joined) == 0;
 }
 
 void Display::_titleTexts() {
@@ -1394,13 +1593,29 @@ void Display::_title() {
   backlightControls.restart();
 }
 
-// The info line's text: the station name, the two title lines and the weather, joined with the shared scroll mark
-// (scrollMark(): " * ", or the holiday icon).  The
-// first three describe what is playing, so over silence they are skipped and only the weather is left -
-// which is the same rule _ssStripH() refuses the whole strip on.  Every empty part is skipped outright
-// rather than left as a bare separator, which is why they all go through one append.
+// Blank the info line and refuse to paint it for a while.  An SD track change clears the title and then re-fills it
+// over two or three requests, so the strip visibly resets, and in the gap the line would show the weather.  So it
+// goes blank once, when the new track starts loading, and stays blank; Display::loop() is what puts it back, because
+// the requests that would have repainted it are exactly the ones being refused.
+void Display::_ssHoldLine(uint32_t ms) {
+  // The whole span, on both draw paths: _windowRect() answers the span when the text is empty, so the framebuffer
+  // path fills the strip rather than nothing, and the non-framebuffer path erases the union with the span the
+  // scrolling paint recorded.
+  if (_sstext) _sstext->setText("");
+  _ssHoldUntil = millis() + ms;
+}
+
+// The info line's text, joined with the shared scroll mark (scrollMark(): " * ", or the holiday icon), and it is
+// one state or the other, never both: while something is playing the line describes what is playing - the station
+// name and the two title lines - and the weather is left out, because a single-row strip that mixes a forecast
+// into a track name pushes the track off it.  Over silence there is nothing to describe, so the weather is the
+// whole line.  That is the same split _ssStripH() refuses the strip on: either half being absent leaves nothing
+// to show.  Every empty part is skipped outright rather than left as a bare separator, which is why they all go
+// through one append.
 void Display::_screensaverLine() {
   if (!_sstext) return;
+  // A track change blanks the line and holds it: _ssHoldLine() sets the deadline, Display::loop() clears it.
+  if (_ssHoldUntil) return;
   // Two ways the line must stay off: the settings refuse the strip, and the widget was locked for a reason of its
   // own.  A locked widget is still _active and setText() paints on _active alone, so a new metadata string
   // repainted the line while the strip was refused - _ssStripH() is the authoritative test, the lock the backstop.
@@ -1419,12 +1634,21 @@ void Display::_screensaverLine() {
     char titlebuf[STATION_FIELD_LENGTH];
     char *t1 = nullptr, *t2 = nullptr;
     splitTitle(titlebuf, sizeof(titlebuf), t1, t2);
-    append(line, sizeof(line), config.station.name);
+    // An untagged SD file's "station name" IS the filename these two halves were cut from, so the line would say it
+    // twice.  When the joined halves reproduce the name there is nothing to add, so the meta is left out here only -
+    // the player page keeps showing it.
+    if (!nameRepeatsTitle(config.station.name, t1, t2)) append(line, sizeof(line), config.station.name);
     append(line, sizeof(line), t1);
     append(line, sizeof(line), t2);
+  } else if (weatherLive() && network.weatherBuf) {
+    // Weather only over silence: playing, the line is the track's, not the forecast's.
+    append(line, sizeof(line), network.weatherBuf);
   }
-  if (weatherLive() && network.weatherBuf) append(line, sizeof(line), network.weatherBuf);
-  _sstext->setText(line);
+  // The screensaver's line is the one that must MOVE: it is the whole bottom row of a panel whose only job here is
+  // to look alive, and a short station name or a one-line forecast would otherwise leave it standing still.  The
+  // widget repeats the text, joined with its own mark, until it is wider than the strip - the width maths, the mark
+  // and the buffer ceiling are all its own, so this stays a one-copy composition.  See plans/screensaver-line-loop.md.
+  _sstext->setTextLooped(line);
 }
 
 // Bring both screensaver widgets in line with the prefs and the active layout.  Called on every entry
@@ -1465,7 +1689,7 @@ void Display::_screensaverWidgets() {
     _screensaverLine();
   } else if (_sstext) {
     _sstext->setText("");
-    _sstext->lock(true);        // ScrollWidget::_clear() erases the window it owns
+    lockIfChanged(_sstext, true);   // ScrollWidget::_clear() erases the window it owns
   }
 
   // --- the meter, or the clock ---
@@ -1493,14 +1717,34 @@ void Display::_screensaverWidgets() {
   if (!_ssvu->initScreensaver(box, *bandsConf_ptr, style)) {
     if (!_ssFailed) {
       _ssFailed = true;
-      ERRORLOG("Screensaver: no PSRAM for the VU canvas (%ux%u) - keeping the clock screensaver",
-               (unsigned)box.w, (unsigned)box.h);
+      WARNINGLOG("Screensaver: no PSRAM for the VU canvas (%ux%u) - keeping the clock screensaver",
+                 (unsigned)box.w, (unsigned)box.h);
     }
     if (_clock) _clock->lock(false);
     return;
   }
   _ssMeterUp = true;
-  if (_clock) _clock->lock(true);
+  lockIfChanged(_clock, true);
+}
+
+// The random spot the screensaver's clock walks to.  One definition for the timed step and for the
+// placement on entry, so the two cannot disagree about the info line's strip: the floor is the content
+// area (_ssContentH()), which is the panel minus that strip when the line is on, and the whole panel
+// when it is off.
+void Display::_screensaverClockTarget(MoveConfig& mv) {
+  int32_t clockH = _clock->clockHeight();
+  int32_t minTop = max((int32_t)TFT_BORDER, (int32_t)_clock->timeHeight());
+  // The floor is the content area rather than the panel: the info line's strip is not the clock's to
+  // cross, which is the whole reason the two bounds are derived from the same number.
+  int32_t maxTop = (int32_t)_ssContentH() - clockH - TFT_BORDER;
+  uint16_t ft = (maxTop > minTop) ? static_cast<uint16_t>(random(minTop, maxTop + 1)) : static_cast<uint16_t>(minTop);
+
+  int32_t minLeft = TFT_BORDER;
+  int32_t maxLeft = dsp.width() - _clock->clockWidth() - TFT_BORDER;
+  int32_t left = (maxLeft > minLeft) ? random(minLeft, maxLeft + 1) : minLeft;
+  if (clockConf_ptr->align == WA_CENTER) left -= (dsp.width() - _clock->clockWidth()) / 2;
+  if (left < 0) left = 0;
+  mv = {static_cast<uint16_t>(left), ft, 0};
 }
 
 void Display::_time(bool redraw) {
@@ -1517,27 +1761,18 @@ void Display::_time(bool redraw) {
   // the clock screensaver walked.  With the meter genuinely up the clock is locked, so its walk would be
   // wasted work even so.
   if (config.isScreensaver && !_ssMeterUp && network.timeinfo.tm_sec % SCREENSAVERMOVE == 0) {
-    int32_t clockH = _clock->clockHeight();
-    int32_t minTop = max((int32_t)TFT_BORDER, (int32_t)_clock->timeHeight());
-    // The floor is the content area rather than the panel: the info line's strip is not the clock's to
-    // cross, which is the whole reason the two bounds are derived from the same number.
-    int32_t maxTop = (int32_t)_ssContentH() - clockH - TFT_BORDER;
-    uint16_t ft = (maxTop > minTop) ? static_cast<uint16_t>(random(minTop, maxTop + 1)) : static_cast<uint16_t>(minTop);
-
-    int32_t minLeft = TFT_BORDER;
-    int32_t maxLeft = dsp.width() - _clock->clockWidth() - TFT_BORDER;
-    int32_t left = (maxLeft > minLeft) ? random(minLeft, maxLeft + 1) : minLeft;
-    if (clockConf_ptr->align == WA_CENTER) left -= (dsp.width() - _clock->clockWidth()) / 2;
-    if (left < 0) left = 0;
-    uint16_t lt = static_cast<uint16_t>(left);
-    //_clock->moveTo({clockConf_ptr->offset, ft, 0});
-    _clock->moveTo({lt, ft, 0});
+    MoveConfig mv;
+    _screensaverClockTarget(mv);
+    _clock->moveTo(mv);
   }
   if (redraw) _clock->forceDraw(); else _clock->draw();
 }
 
 void Display::_updateVolume() {
   if(!_voltxt) return;
+  // Only a screen that keeps the footer has a volume line to paint; anywhere else it would land over the number,
+  // the progress bar or a dialog's title.
+  if (!_footerShown(FW_VOLTXT)) return;
 
   uint8_t vol = config.store.volume;
 
@@ -1572,6 +1807,7 @@ void Display::_volume() {
   _updateVolume();
   if (_mode==VOL) {
     _setReturnTicker(3);
+    _nums->setFieldMax(VOLUME_SCALE);
     _nums->setText(config.store.volume, numtxtFmt);
   }
 }
@@ -1756,6 +1992,7 @@ void Display::_reinitWidgets() {
 }
 
 void Display::_setLayoutPointers() {
+  layoutSanitize(&activeLayout);
   // The VU's box is resolved HERE, the one place every copy into activeLayout passes through - layoutCopy()
   // for a compiled conf or a LittleFS slot, layoutStagingCopyTo() for the editor's own push.  Resolving once,
   // at load, is what lets the widget draw what it is given and nothing re-test the numbers per frame.  It
@@ -1815,10 +2052,10 @@ void Display::_applyState(applyMode_e mode) {
   _applyMetaInvert();
   _reinitWidgets();
   // Re-apply every feature lock: _reinitWidgets() may just have shown a widget the layout brought back.
-  if (_vuwidget)  _vuwidget->lock(!vuDraws());
+  if (_vuwidget)  lockIfChanged(_vuwidget, !vuDraws());
   // Mirrors SHOWWEATHER exactly, including the shared-row suppression, so a switch cannot drop it mid-overlay.
   hideWeatherIfChanged(_weather, _weatherHidden());
-  if (_bufferbar) _bufferbar->lock(!bufferbarInLayout() || !editorOpt(config.store.bufferbar));
+  if (_bufferbar) lockIfChanged(_bufferbar, !bufferbarInLayout() || !editorOpt(config.store.bufferbar));
   // The clock's lock came with _reinitWidgets(), the only place it can be applied early enough for the hide's
   // erase to be painted over by the weather and the VU that follow it.  lockIfChanged() is still here as a guard
   // for the case where something re-showed the clock behind _reinitWidgets()' back.  The unconditional clear()
@@ -1868,7 +2105,7 @@ void Display::_applyState(applyMode_e mode) {
         // here - the same rule _switchMode(PLAYER) and the boot painter follow.
         if (_volip) {
           if (network.status == SDOFFLINE) {
-            _volip->setText(utf8_trim15(l10n(L10N_MSG_OFFLINE_15CHAR)), "\030\031%s");
+            _volip->setText(utf8_trim15(l10n(L10N_MSG_OFFLINE_15CHAR)), ipLineFmt(true));
           } else if (*shareWeatherIP_ptr && weatherLive()) {
             _volip->setText("");   // the weather owns that shared row
           } else {
@@ -1966,6 +2203,9 @@ void Display::_buildThemeListJson() {
   String json = "{";
   bool first = true;
   for (uint8_t i = 0; i < themeCount(); i++) {
+    #if !defined(DSP_TFT)
+      if (i >= THEME_BUILTIN_COUNT) break;
+    #endif
     if (!themeFilled(i)) continue;
     if (!first) json += ',';
     first = false;

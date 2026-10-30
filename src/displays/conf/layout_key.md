@@ -283,6 +283,9 @@ the two boxes plainly overlap in the vertical band.
   derived from `DSP_HEIGHT`; it is the layout's own value now, so a layout can size its clock and its
   number page independently. The value each shipped layout carries is what the old `DSP_HEIGHT` rule
   produced for that panel, so nothing moved.
+  The SIZE is all a layout picks of the face: the Clock Font option (`clockFontId`, one runtime
+  choice for the whole device) draws both the clock and the number, so `numConf` at size 2 and
+  `clockConf` at size 3 are the same design at two sizes. Clock Glow applies to both as well.
 - **`MAX_WIDTH`** is the usable width inside the border margin, and **`TFT_BORDER`** is that margin —
   the left/right inset in pixels. It was `TFT_FRAMEWDT`, a name that read as a width for a value that
   is not one; round 8 renamed it, and carried `conf_tool.py --import` with it, so a community conf
@@ -306,6 +309,57 @@ per-layout booleans now, and they are the first two entries of the TRANSFORMS gr
 Which layouts want which, and why, is worked through in `plans/font-overhaul.md` §2.11. The one that
 catches people out is that **the same clock size can go either way**: the 35 px TFT family shows
 neither, while the ILI9225 — a 35 px panel too — shows both.
+
+**At the two smallest clock sizes `fullClock` gives you the date alone.** Size index 0 (no clock font — the
+built-in cell) and 1 (15 px) have no room for a divider column: the divider's gap is a pixel or two, and the
+day of week is an 8 px built-in row squeezed beside the time. So at those sizes the divider and the day of
+week are dropped and the date is kept, on a row of its own below the time. Those two sizes then read as two
+clean rows — the time, with the seconds after it only if `seconds` is on, and the date under it — instead of
+the collapse index 0 used to have, where the date landed on the time's own row and the seconds were raised a
+row above it. **`fullClock` does not switch the seconds on at these two sizes:** the seconds block lives beside
+the divider wherever there is one, so at 0 and 1 it appears only when `seconds` is set as well. Sizes 2 to 4
+are unchanged — there `fullClock` still implies the seconds — and the day of week is what goes, not the date.
+The WebUI withholds **Clock Glow** at these two sizes — the glow needs a clock font's glow character — and
+**Screensaver: full date** only while the clock has no font at all (size 0). At size 1 that row IS offered as
+soon as the layout has `fullClock` or `seconds`, because the switch still governs the SECONDS on the screensaver
+there; what the screensaver never draws at 0 or 1 is the date.
+
+Three details of those two sizes are worth knowing when you lay one out:
+
+- the `seconds` block, when `seconds` is on, follows the time by one gap and sits on the time's own row (at 0
+  and 1 there is no divider column for it to live in), and the clock's box is only as wide as those two rows
+  need;
+- **each of the two lines is aligned on its own** at these sizes: the time (with its seconds) and the date are
+  placed separately by `clockConf.align`, so a centred clock centres its time line and its date line
+  individually rather than centring the block as a whole. `WA_LEFT` starts both at the clock's left edge,
+  `WA_CENTER` centres both on the panel, and `WA_RIGHT` right-aligns both — which is what the date always did
+  above these sizes;
+- the box is sized for whichever row is wider — usually the date — so the date is never clipped.
+
+**The glow is off at size 0, and it follows the row everywhere else.** The clock glow paints the cells the digits
+sit in with `clockbg`, and the big number widget (`numConf`) paints its own with `digitbg`; each needs a clock
+font's own glow character, so at size 0 there is none and the "glow" would be a literal `00:00` behind the time.
+The clock and the number are switched separately (Clock Glow and Digits Glow), so one can glow without the other.
+Size 0 therefore draws no glow at all — the time's, the seconds' and the colon's own off colour alike — and the
+WebUI's Clock Glow row is not offered for a widget that size. Where the glow does apply it starts where the digits
+start, so it follows the same per-row alignment as the time and the colon rather than the box's edge.
+
+### What a size index means for `top`
+
+`fontsize` is a size INDEX, not a pixel height, and the two ends of the ladder anchor differently. Get this wrong
+and a line lands half off the panel - or, at 0, does not appear at all:
+
+| index | the face | what `top` is | where the ink goes |
+|---|---|---|---|
+| 0 | the system font (the panel's own font setting) | the TOP of the digits | DOWN from `top`: one 6x8 cell, rows `top` .. `top + 7` |
+| 1..4 | the clock font's 15/35/52/70 px face | the BASELINE of the digits | UP from `top`, as far as that face is tall |
+
+So a `top` that suits one size does not suit the other: a clock or a number at 0 hangs DOWN from its `top`, while
+at 1..4 it stands ON it. That is what the three small panels' confs assume - the 284x76 puts `numConf` and
+`clockConf` at the same `top` (57) so the two system-font items share one row, and the 128x32's number at `top` 12
+would be drawn off the panel if a 15 px cell stood on it. `fullClock` shows the same split: with a clock font the
+date row is BELOW `top` while the time's ink is above it, so `top` is an anchor between the two rows; at index 0
+the time hangs from `top` and the date follows one row-gap below it.
 
 ### `FONTSHIFT` / `CLOCKSHIFT`
 
@@ -380,10 +434,16 @@ Two consequences worth knowing when you place `numConf`:
   win the row — but the row is also **not** free afterwards: the player page puts it back when the
   number screen closes, so a layout that overlaps `numConf` with the weather line will show the
   weather again a moment after the volume disappears.
-- The clock is *not* covered by the digits — `numConf` draws only its own glyph cells, with no
-  background fill. A layout that overlaps the clock with the digits will therefore show the clock
-  around them; the three number screens hide the clock only where the screen has no ticks of its
-  own to keep them in step (the volume page, the number entry and the SD index screen all do).
+- The clock is *not* covered by the digits — `numConf` draws only its own cells, with no background
+  fill. A layout that overlaps the clock with the digits will therefore show the clock around them;
+  the three number screens hide the clock only where the screen has no ticks of its own to keep them
+  in step (the volume page, the number entry and the SD index screen all do). With Digits Glow ON there
+  *is* a fill: the value is zero-filled to the digits that screen's widest value needs — `VOLUME_SCALE`
+  for the volume, the playlist total for a station/track number — and that many cells are cleared, so a
+  one-digit number owns its whole field and erases that much of an overlapping row.
+- Every screen on the dialog page except the volume page hides the footer's widgets entirely: the station
+  entry, the SD index counter, the update and validator progress, and the info/settings/timezone/wifi/lost/
+  sleeping dialogs. The volume page and the volume overlay keep all of them.
 
 ### What you cannot leave out
 
@@ -515,6 +575,13 @@ the weather) when the meter is off, write **`clockMove` or `weatherMoveVU`** as 
 That is a real behaviour, not "unused". It is why an empty `MoveConfig` is worth reading twice — and why
 an empty `weatherMove` is the *opposite*: it is read only while the meter is off, so its zeros mean "no
 move" and it leaves the line where the conf put it rather than hiding it.
+
+**A MOVE that names the widget's own position is also "no move"**, and it is the spelling to use when a state must
+take the line somewhere *else* in another state but leave it alone in this one — an all-zero move would hide it
+instead. It is a true no-op: nothing is erased and nothing is redrawn. It used to do both, and the gap between
+those two passes was a background-coloured line torn across the widget's span (the whole span, not just the text,
+because a scrolling line records its span as the rectangle to erase) — which is what the reporter saw on every
+start and stop of the stream, in the one state where the move and the conf position happen to agree.
 
 ---
 

@@ -10,6 +10,10 @@
 
 bool clockTrustworthy();
 
+// Fills 'out' with the current local time and returns true only when the system clock is real
+// (past the one-year epoch floor).  The single place the time(NULL)/localtime_r() read lives.
+bool systemLocalTime(struct tm& out);
+
 /* ===== Deep Sleep Wake GPIO Mask =====
    All defined input pins on RTC-capable GPIOs are automatically used as wake sources.
    ANY interaction (button press release, rotary turn) wakes the device.
@@ -123,6 +127,9 @@ public:
   char* stationByNum(uint16_t num);
   uint16_t fillPlaylistRange(int from, uint8_t count, char names[][STATION_FIELD_LENGTH / 2]);
   void doSleepW();
+  static void requestSleep();
+  static void requestSleepWake();
+  void serviceSleep();
   void sleepForAfter(uint16_t sleepfor, uint16_t sa = 0);
   void stopStandby();
   void startStandby();
@@ -134,6 +141,7 @@ public:
 
 private:
   static uint16_t sleepfor;
+  static volatile uint8_t sleepWanted;   // 0 = none, 1 = doSleepW (no wake timer), 2 = doSleep (wake after sleepfor)
   static void sleepCore();
   static void doSleep();
   char ipBuf[16] = {0};

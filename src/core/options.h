@@ -39,12 +39,12 @@ or examine the examples in builds/trip5 and make your own!
 //   I2S audio buffer:             ~640 KB  (UINT16_MAX * 10, player.init())
 //   VU/FFT Scratch                   8 KB  (vuScratchAlloc())
 //   SD File Manager                 68 KB  (allocated only when SD File Manager runs, asmBegin())
-//   WebUI files cache:            ~120 KB  (actually ~400 KB if using uncompressed files, allocated last, netserver.begin())
+//   WebUI files cache:            ~130 KB  (actually ~420 KB if using uncompressed files, allocated last, netserver.begin())
 // ---------------------------------------
-//   VS1053 & OLED total:          ~489 KB or ~769 KB (uncompressed WebUI files)
-//   I2S & OLED total:             ~836 KB or ~1116 KB
-//   VS1053 & TFT total:           ~717 KB or ~997 KB
-//   I2S & TFT total:             ~1064 KB or ~1344 KB
+//   VS1053 & OLED total:          ~499 KB or ~789 KB (uncompressed WebUI files)
+//   I2S & OLED total:             ~846 KB or ~1136 KB
+//   VS1053 & TFT total:           ~727 KB or ~1017 KB
+//   I2S & TFT total:             ~1074 KB or ~1364 KB
 // Note: WebUI cache is opportunistic so if PSRAM runs low, files stay in LittleFS instead.
 
 
@@ -221,12 +221,6 @@ or examine the examples in builds/trip5 and make your own!
 // #define SCROLLDELAY 5000 // delay time (ms) for widgets: meta, title1, title2 / playlist mode scroll divides by 5
 // #define SCROLLTIME 20 // time (ms) per pixel-column movement (a column of font pixels, not display pixels)
 
-/* Pre-processed Text: Need all latin accents removed from your display? */
-// These are leftovers and may not be useful anymore...
-// #define PRETEXT_FOLDACCENT
-// #define PRETEXT_FOLDCYRILLIC
-
-
 /* ============================== SPI BUSES AND PINS ============================== */
 
 /* To allow multiple devices to use the same/different SPI buses, we name them */
@@ -348,6 +342,8 @@ or examine the examples in builds/trip5 and make your own!
   #endif
 #endif
 /* Enables flac decoding on true VS1053B boards - will be disabled unless explicitly set true in myoptions.h */
+// Special note: if this is true, there will be "VS1053" on the display just before the version number to show
+// initialization and patching (false and I2S builds have no message)
 #ifndef VS_PATCH_ENABLE
   #define VS_PATCH_ENABLE false /* Enables FLAC playback on VS1053B boards but should be false (the default) for VS1003 and VS1053 (non-B) boards. Some boards sold as VS1053 but actually VS1003 will have 2.5V voltage regulator instead of 1.8V. */
 #endif
@@ -413,6 +409,9 @@ or examine the examples in builds/trip5 and make your own!
 #ifndef PLAYER_FORCE_MONO
   #define PLAYER_FORCE_MONO false // mono option - false stereo, true mono (also add for mono I2S decoders for the VU)
 #endif
+#ifndef SS_INFO_TEXT
+  #define SS_INFO_TEXT false
+#endif
 
 /* --- VOLUME SCALE --- */
 #ifndef VOLUME_SCALE // Default 42 doubles upstream library's scale of 21; 50-100 gives extremely fine control
@@ -421,7 +420,6 @@ or examine the examples in builds/trip5 and make your own!
 #if VOLUME_SCALE < 21 || VOLUME_SCALE > 255
   #error VOLUME_SCALE must be between 21 and 255
 #endif
-
 
 /* --- CHECK DECODER OPTIONS --- */
 #if I2S_DOUT!=255 && VS1053_CS!=255
@@ -837,14 +835,18 @@ or examine the examples in builds/trip5 and make your own!
 #if WIFI_ATTEMPTS < 4
   #error define error: WIFI_ATTEMPTS must be at least 4
 #endif
-// How many seconds to wait after boot completed to Start the Async Services (other services are starting and too soon can crash netserver stack).  The less-important services started here (can take a full minute to complete if server connection issues):
-// verifies/downloads locale JSON file, checks for new version (triggers autoupdate), downloads PLAYLIST_DEFAULT_URL (if set), updates timezones.json.gz and rb_srvrs.json, cleans up stale search results
-// 3 s rather than 10: the delay lets the audio buffer fill before anything competes for WiFi, and the WebUI is held back until the services are done (see Startup::loop())
-#ifndef STARTUP_ASYNC_SERVICES_DELAY
-  #define STARTUP_ASYNC_SERVICES_DELAY 3
-#endif
- // How many seconds to wait after boot completed (including smart start and Async Services) to consider successful, if rebooted during that time, will enter safe mode (disables smart start, autoupdate, boots to web not SD)
-  #ifndef BOOT_STABLE_TIME
+// (There is no STARTUP_ASYNC_SERVICES_DELAY any more.  It delayed the three startup downloads - version check,
+// timezones, radio-browser servers - before they began, and again after they finished as a "settle".  Both were
+// removed once the WebUI was moved onto its own task: the delay only postponed the WebUI behind the downloads, and
+// the settle was protecting a window that the boot-stable proof below now covers properly.)
+// How many seconds the WebUI must STAY UP before the boot counts as successful.  A reboot inside that window puts
+// the next boot into safe mode (disables smart start, autoupdate, boots to web not SD).
+// The WebUI coming up is the last risky step of a boot - netserver.begin() allocates the request queue, the
+// listener, mDNS and the PSRAM cache, and the first page load is the largest allocation burst in the session - so
+// that is what the marker is proved against.  The startup services are deliberately NOT part of the decision: in SD
+// mode they stay parked for the whole session, and a boot that only parked them is as safe as one that never had
+// them (that is what lets SD mode survive a restart without landing in safe mode).
+#ifndef BOOT_STABLE_TIME
   #define BOOT_STABLE_TIME 10
 #endif
 // How many times to retry a failed stream connection before giving up
@@ -882,6 +884,8 @@ or examine the examples in builds/trip5 and make your own!
 #endif
 
 // The following tree is duplicated in options.h AND options_overrides.h so if changes are needed, change both files
+// I2S-based radios use the CPU for decoding so best to allocate an entire core for decoding
+// VS1053 handles decoding so it's better to allow the display task its own core
 #ifndef NETWORK_CORE
   #if VS1053_CS!=255
     #define NETWORK_CORE 0
@@ -891,40 +895,41 @@ or examine the examples in builds/trip5 and make your own!
 #endif
 
 /* --- TWEAKS FOR CORE PROCESSES --- */
-/* Stack sizes are in KB; conversion to bytes is done locally in each .cpp file via a _BYTES macro */
-/* Override in myoptions.h only if needed: #define STACK_MULTIPLIER 1 to disable scaling and use yoRadio defaults */
-#ifndef STACK_MULTIPLIER
-  #define STACK_MULTIPLIER 2 // ESP32-S3: double stack sizes (most SRAM available)
-#endif
-#if STACK_MULTIPLIER != 1 && STACK_MULTIPLIER != 2
-  #error define error: STACK_MULTIPLIER must be 1 or 2
-#endif
-/* Arduino loop() task (main.cpp) — SET_LOOP_TASK_STACK_SIZE() uses this directly in bytes */
+/* Stack sizes are in KB; each call site passes KB * 1024 to xTaskCreate. */
+/* These numbers have been well-tested as of 2026.10.20 */
 #ifndef LOOP_TASK_STACK_SIZE
-  #define LOOP_TASK_STACK_SIZE (8 * STACK_MULTIPLIER) // KB; 8 (yoRadio) or 16
-#elif LOOP_TASK_STACK_SIZE < 4 || LOOP_TASK_STACK_SIZE > 64
-  #error define error: LOOP_TASK_STACK_SIZE must be between 4 and 64 (value in KB)
+  #define LOOP_TASK_STACK_SIZE 16 // KB
+#elif LOOP_TASK_STACK_SIZE < 8 || LOOP_TASK_STACK_SIZE > 64
+  #error define error: LOOP_TASK_STACK_SIZE must be between 8 and 64 (value in KB)
 #endif
 /* DspTask (display.cpp): render loop task */
 #ifndef DSP_TASK_STACK_SIZE
-  #define DSP_TASK_STACK_SIZE (4 * STACK_MULTIPLIER) // KB; 4 (yoRadio) or 8
-#elif DSP_TASK_STACK_SIZE < 2 || DSP_TASK_STACK_SIZE > 32
-  #error define error: DSP_TASK_STACK_SIZE must be between 2 and 32 (value in KB)
+  #define DSP_TASK_STACK_SIZE 8 // KB
+#elif DSP_TASK_STACK_SIZE < 4 || DSP_TASK_STACK_SIZE > 32
+  #error define error: DSP_TASK_STACK_SIZE must be between 4 and 32 (value in KB)
 #endif
 /* netserverLoopTask (netserver.cpp): runs netserver.loop() on its own pinned task */
 #ifndef NETSERVER_TASK_STACK_SIZE
-  #define NETSERVER_TASK_STACK_SIZE (4 * STACK_MULTIPLIER) // KB; 4 (yoRadio) or 8
-#elif NETSERVER_TASK_STACK_SIZE < 2 || NETSERVER_TASK_STACK_SIZE > 32
-  #error define error: NETSERVER_TASK_STACK_SIZE must be between 2 and 32 (value in KB)
+  #define NETSERVER_TASK_STACK_SIZE 8 // KB
+#elif NETSERVER_TASK_STACK_SIZE < 4 || NETSERVER_TASK_STACK_SIZE > 32
+  #error define error: NETSERVER_TASK_STACK_SIZE must be between 4 and 32 (value in KB)
 #endif
-/* Network utility tasks (network.cpp, player.cpp): doSync, searchWiFi, retryStreamConnection */
+/* Network utility tasks (network.cpp): doSync, retryStreamConnection, wifiReconnectionTask.  Unmeasured, and doSync runs a TLS handshake. */
 #ifndef NETWORK_TASK_STACK_SIZE
-  #define NETWORK_TASK_STACK_SIZE (4 * STACK_MULTIPLIER) // KB; 4 (yoRadio) or 8
-#elif NETWORK_TASK_STACK_SIZE < 2 || NETWORK_TASK_STACK_SIZE > 32
-  #error define error: NETWORK_TASK_STACK_SIZE must be between 2 and 32 (value in KB)
+  #define NETWORK_TASK_STACK_SIZE 8 // KB
+#elif NETWORK_TASK_STACK_SIZE < 4 || NETWORK_TASK_STACK_SIZE > 32
+  #error define error: NETWORK_TASK_STACK_SIZE must be between 4 and 32 (value in KB)
 #endif
-/* Minimum allocation bytes; min free heap before spawning a background task (search, curated, playback, rb_click) */
-#define MIN_MALLOC (12056 * STACK_MULTIPLIER)
+/* Startup services task (startup.cpp): the three TLS downloads.   */
+#ifndef STARTUP_TASK_STACK_SIZE
+  #define STARTUP_TASK_STACK_SIZE 8 // KB
+#endif
+/* WebUI bring-up task (startup.cpp): route registration plus the LittleFS read into the PSRAM cache. */
+#ifndef WEB_BRINGUP_TASK_STACK_SIZE
+  #define WEB_BRINGUP_TASK_STACK_SIZE 8 // KB
+#endif
+/* Minimum free heap before spawning a background task (search, curated, playback, rb_click). */
+#define MIN_MALLOC 24112
 /* Priority scale for all pinned tasks (FreeRTOS: higher number = more CPU, preempts lower tasks) */
 /* Arduino loop() runs at priority 1. Priority 0 = idle-level (starved by any other task — do not use). */
 #ifndef DSP_TASK_PRIORITY
@@ -965,6 +970,13 @@ or examine the examples in builds/trip5 and make your own!
 #endif
 #ifndef VU_PEAK_THICKNESS_MILLI
   #define VU_PEAK_THICKNESS_MILLI 11 // marker thickness = length * 11/1000, rounded up (never below 1 px)
+#endif
+// The next two macros are used together (and only apply to TFT displays)
+#ifndef VU_AXIS_THICKNESS_UP_WIDGET
+  #define VU_AXIS_THICKNESS_UP_WIDGET 48 // if the height of a widget exceeds these pixels AND...
+#endif
+#ifndef VU_AXIS_THICKNESS_UP_DISPLAY
+  #define VU_AXIS_THICKNESS_UP_DISPLAY 240 // the height AND width of a display exceeds this, make the axis 2 pixels thick (only on TFT)
 #endif
 #ifndef VU_DUTY_FACTOR
   #define VU_DUTY_FACTOR 3 // redraw interval = max(VU_REFRESH_MS, draw time * this): 3 means a 1/3 duty
@@ -1093,13 +1105,16 @@ or examine the examples in builds/trip5 and make your own!
 #ifndef SCREENSAVERMOVE // how often to move the screensaver (in seconds)
   #define SCREENSAVERMOVE 15
 #endif
-#ifndef HEADER_TIMEOUT
+#ifndef SLEEP_MSG_HOLD // hold the sleep message on-screen before sleep actually starts (in seconds)
+  #define SLEEP_MSG_HOLD 5
+#endif
+#ifndef HEADER_TIMEOUT // audio stream connection header timeout (in ms)
   #define HEADER_TIMEOUT 5000
 #endif
 #ifndef USE_OTA // define true to enable Arduino OTA
   #define USE_OTA false
 #endif
-#ifdef OTA_PASS
+#ifndef OTA_PASS
   //#define OTA_PASS "myotapassword12345"
 #endif
 #ifndef AP_SSID // name of hotspot in AP Mode
@@ -1133,7 +1148,19 @@ or examine the examples in builds/trip5 and make your own!
 /* ============================== DEBUG ============================== */
 
 /* Enable all the debug logs with #define ALL_DEBUG_LOGS */
+/* Note that turning on all logs can make the serial log very noisy (and every print to serial adds milliseconds of delay to running code! */
+/* Also note the log prints a lot of diagnostic data that should not be interpreted as errors. */
+
 #ifdef ALL_DEBUG_LOGS
+  #ifndef WARNINGS_LOG
+   #define WARNINGS_LOG // This enables showing non-fatal warning-level errors
+  #endif
+  #ifndef CONFIG_KEY_DEBUG
+    #define CONFIG_KEY_DEBUG // This shows every Prefs key and the value written to it
+  #endif
+  #ifndef METADATA_LOG
+    #define METADATA_LOG // This enables showing ID3 and Icy Metadata in the logs - useful to debug titles not being printed by handleShowStreamTitle()
+  #endif
   #ifndef NETSERVER_DEBUG
    #define NETSERVER_DEBUG // This enables Netserver logging: GET client requests and sending files in chunks
   #endif
@@ -1146,6 +1173,12 @@ or examine the examples in builds/trip5 and make your own!
   #ifndef WIDGET_DEBUG
     #define WIDGET_DEBUG // This shows the Widget's Text (and the VU draw cost) in logging
   #endif
+  #ifndef AUDIO_DEBUG
+    #define AUDIO_DEBUG // Per-track chatter from the audio library: tag and file sizes, syncword positions, the 10 s ring arithmetic, the codec/rate report - plus the ID3 frame walk and the library's own diagnostic lines
+  #endif
+  #ifndef VU_VS1053_LOG
+    #define VU_VS1053_LOG true // The 1 Hz "raw dB ... read us avg" sampler line
+  #endif
 #endif
 #ifndef ESPFILEUPDATER_VERBOSE
   #ifdef ALL_DEBUG_LOGS
@@ -1155,13 +1188,11 @@ or examine the examples in builds/trip5 and make your own!
   #endif
 #endif
 
-/* Print the previous boot's crash at boot */
-#define COREDUMP_SUMMARY_AT_BOOT // BOOTLOG the last core dump's task, PC, backtrace and ELF SHA into the serial log.
-                                 // ESP-IDF writes that dump itself:
-                                 // every partition table here already reserves a "coredump" partition and the prebuilt
-                                 // libraries are built with core-dump-to-flash in ELF format.  Nothing is printed when
-                                 // there is no dump.  Comment this out to leave the dump alone entirely.
-// #define COREDUMP_KEEP_DUMP    // keep the dump in flash after reporting it, for esp-coredump and the Espressif tools
+/* Print the previous boot's crash at boot (only useful if the binar)*/
+// BOOTLOG the last core dump's task, PC, backtrace and ELF SHA into the serial log.
+// ESP-IDF writes that dump itself (provided the partition file allocates for it):
+#define COREDUMP_SUMMARY_AT_BOOT
+// the coredump from crash-reboots are always available from netserver at endpoint /coredump
 
 #ifndef FS_REQUIRED_FREE_SPACE
   #define FS_REQUIRED_FREE_SPACE 150 // KB that must stay free in LittleFS: netserver aborts search and curated downloads below it
@@ -1320,6 +1351,8 @@ or examine the examples in builds/trip5 and make your own!
 #ifndef EHDP
   #define EHDP true
 #endif
+
+/* --- Screen --- */
 #ifndef SCREEN_FLIP
   #define SCREEN_FLIP false
 #endif
@@ -1350,6 +1383,7 @@ or examine the examples in builds/trip5 and make your own!
 #define CHUNKY6_PX      1  // Default (spacing pixels) - great on color screens
 #define CHUNKY6PX       1  // An alias for above...
 #define CHUNKY6         2  // Really heavy looking - great on mono OLED screens
+#define NIXIE_TUBE      3  // Curvy Nixie-tube numbers
 
 #ifndef CLOCKFONT
   #if DSP_MODEL==DSP_SH1106 || DSP_MODEL==DSP_SH1107 || DSP_MODEL==DSP_SSD1305 || DSP_MODEL==DSP_SSD1306 || DSP_MODEL==DSP_SSD1327
@@ -1357,6 +1391,9 @@ or examine the examples in builds/trip5 and make your own!
   #else
     #define CLOCKFONT CHUNKY6PX
   #endif
+#endif
+#ifndef PRETEXT_ALLCAPS
+  #define PRETEXT_ALLCAPS false
 #endif
 #ifndef NUMBERED_PLAYLIST
   #define NUMBERED_PLAYLIST false
@@ -1378,18 +1415,14 @@ or examine the examples in builds/trip5 and make your own!
   #define CLOCK_TWELVE false
 #endif
 /* This makes the characters get an LED/VFD background color that makes it look like a real clock (only has an effect on color displays) */
-#ifndef CLOCKGLOW // CLOCKGLOW uses a special character to color COLOR_CLOCK_BG behind the clock for a glow effect
-  #if CLOCKFONT == CHUNKY6 // with CHUNKY6, this effect looks not great
-    #define CLOCKGLOW false
-  #else // All other fonts look great!
-    #define CLOCKGLOW true
-  #endif
+#ifndef CLOCKGLOW
+  #define CLOCKGLOW true
 #endif
 #ifndef VOLUME_PAGE
-  #define VOLUME_PAGE false
+  #define VOLUME_PAGE true
 #endif
-#ifndef PRETEXT_ALLCAPS
-  #define PRETEXT_ALLCAPS false
+#ifndef DIGITSGLOW
+  #define DIGITSGLOW true
 #endif
 #if defined(SCREEN_BRIGHTNESS) && (SCREEN_BRIGHTNESS < 1 || SCREEN_BRIGHTNESS > 100)
   #warning "define warning in myoptions.h: SCREEN_BRIGHTNESS is out of range (1-100), reverting to default 100"
@@ -1398,6 +1431,8 @@ or examine the examples in builds/trip5 and make your own!
 #ifndef SCREEN_BRIGHTNESS
   #define SCREEN_BRIGHTNESS 100
 #endif
+
+/* --- Screensaver --- */
 #ifndef SS_NOTPLAYING
   #define SS_NOTPLAYING false
 #endif
@@ -1427,8 +1462,11 @@ or examine the examples in builds/trip5 and make your own!
 #ifndef SS_FULL_DATETIME
   #define SS_FULL_DATETIME false
 #endif
-#ifndef SS_TEXT
-  #define SS_TEXT false
+#ifndef SS_SMALLER_CLOCK
+  #define SS_SMALLER_CLOCK false
+#endif
+#ifndef SS_INFO_TEXT
+  #define SS_INFO_TEXT false
 #endif
 #ifndef SS_VU
   #define SS_VU false
@@ -1439,6 +1477,18 @@ or examine the examples in builds/trip5 and make your own!
 #ifndef SS_VUPEAK
   #define SS_VUPEAK SHOW_VU_PEAK // numeric 0-index
 #endif
+#ifndef SS_SLEEPTIMER
+  #define SS_SLEEPTIMER false
+#endif
+#if defined(SS_SLEEPTIME) && (SS_SLEEPTIME < 5 || SS_SLEEPTIME > 1080)
+  #warning "define warning in myoptions.h: SS_SLEEPTIME is out of range (5-1080), reverting to default 30"
+  #undef SS_SLEEPTIME
+#endif
+#ifndef SS_SLEEPTIME
+  #define SS_SLEEPTIME 30
+#endif
+
+/* --- Screen Dimming --- */
 #ifndef DIMMING_ENABLED
     #define DIMMING_ENABLED false
 #endif  
@@ -1461,6 +1511,8 @@ or examine the examples in builds/trip5 and make your own!
 #ifndef DIMMING_BRIGHTNESS
   #define DIMMING_BRIGHTNESS 50
 #endif
+
+/* --- Controls --- */
 #ifndef TOUCH_FLIP
   #define TOUCH_FLIP false
 #endif
@@ -1484,6 +1536,8 @@ or examine the examples in builds/trip5 and make your own!
 #ifndef IR_TOLERANCE
   #define IR_TOLERANCE 35
 #endif
+
+/* --- Locale --- */
 // The Display Locale is changeable!  (Check locale/dsplocales.json for full list)
 #ifndef DSP_LOCALE
   #define DSP_LOCALE "en_US"
@@ -1518,6 +1572,8 @@ or examine the examples in builds/trip5 and make your own!
 #if TIME_SYNC_INTERVAL < 1 || TIME_SYNC_INTERVAL > 24
   #error define error: TIME_SYNC_INTERVAL must be a number from 1 to 24 (hours)
 #endif
+
+/* --- Weather --- */
 #ifndef WEATHER_API
   #define WEATHER_API "OM1"
 #endif
@@ -1573,6 +1629,8 @@ static_assert(
   __builtin_strcmp(WEATHER_WIND_SPEED_UNITS, "m/s") == 0,
   "define error: WEATHER_WIND_SPEED_UNITS must be \"kmh\", \"mph\", \"kn\", or \"m/s\""
 );
+
+/* --- MQTT --- */
 #ifndef MQTT_ENABLE
   #define MQTT_ENABLE false
 #endif

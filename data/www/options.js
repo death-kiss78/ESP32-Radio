@@ -145,6 +145,7 @@ function populateNamedDropdown(elemId, data) {
       const cmd = cmdMap[elemId] || elemId;
       websocket.send(`${cmd}=${sel.value}`);
       sel.dataset.prev = sel.value;
+      if (elemId === 'themeId') document.documentElement.setAttribute('data-theme', sel.value);
     }
   });
 }
@@ -537,10 +538,8 @@ function getWiFi(path){
 }
 
 /** SYSTEM **/
-// 30 s, not 15: the WebUI is deliberately held back until the startup services are out of the way (see
-// Startup::loop()), so a boot that has a download to do can take longer than the old window - and the redirect
-// still fires the instant /ready answers, so a longer window only ever helps.
-function rebootSystem(info, waitSeconds = 30, autoReload = true){
+// 60 s is a CEILING, not a wait: redirectWhenReady polls /ready every second and returns as soon as the device has been seen down and then up again
+function rebootSystem(info, waitSeconds = 60, autoReload = true){
   getId("settingscontent").innerHTML=`<h2>${info}</h2>`;
   getId("settingsdone").classList.add("hidden");
   getId("navigation").classList.add("hidden");
@@ -582,6 +581,11 @@ function hideDangerConfirm() {
   });
 }
 
+// Rows behind the three unlock switches are found by class, so one added to the Danger Zone joins the group
+function setDangerZoneVisible(visible) {
+  classEach('dangerzone', el => el.classList.toggle('hidden', !visible));
+}
+
 function checkDangerZone() {
   const sw1 = getId('dangerzone_sw1');
   const sw2 = getId('dangerzone_sw2');
@@ -590,16 +594,13 @@ function checkDangerZone() {
   const allChecked = sw1.classList.contains('checked') && 
                      sw2.classList.contains('checked') && 
                      sw3.classList.contains('checked');
-  const dangerzone = getId('dangerzone');
   const txt = getId('dangerzone_txt');
   if(allChecked) {
-    if(dangerzone) {
-      dangerzone.classList.remove('hidden');
-      scrollToBottom();
-    }
+    setDangerZoneVisible(true);
+    scrollToBottom();
     if(txt) txt.textContent = t('lbl_dz_careful', 'Be Careful!');
   } else {
-    if(dangerzone) dangerzone.classList.add('hidden');
+    setDangerZoneVisible(false);
     if(txt) txt.textContent = t('lbl_dz_unlock', 'Turn on all switches to unlock');
   }
 }
@@ -620,7 +621,6 @@ function initDangerZone() {
   });
   const txt = getId('dangerzone_txt');
   if(txt) txt.textContent = t('lbl_dz_unlock', 'Turn on all switches to unlock');
-  const dangerzone = getId('dangerzone');
-  if(dangerzone) dangerzone.classList.add('hidden');
+  setDangerZoneVisible(false);
   hideDangerConfirm();
 }

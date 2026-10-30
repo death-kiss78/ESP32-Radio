@@ -4,6 +4,7 @@
     <div class="navigation group_system hidden" id="navigation">
       <div class="navitem group_controls hidden" data-target="group_controls" data-i18n="ttl_controls">Controls</div>
       <div class="navitem group_display hidden" data-target="group_display" data-i18n="ttl_screen">Screen</div>
+      <div class="navitem group_display hidden" data-target="group_screensaver" data-i18n="ttl_screensaver">Screensaver</div>
       <div class="navitem group_locale hidden" data-target="group_locale" data-i18n="ttl_locale">Locale</div>
       <div class="navitem group_weather hidden" data-target="group_weather" data-i18n="ttl_weather">Weather</div>
       <div class="navitem group_system hidden" data-target="group_system" data-i18n="ttl_system">System</div>
@@ -83,7 +84,8 @@
               </select>
             </div>
             <div class="inputwrap group_theme hidden">
-              <span class="inputtitle" data-i18n="lbl_display_theme">Display Theme</span>
+              <span class="inputtitle group_display_theme hidden" data-i18n="lbl_display_theme">Display Theme</span>
+              <span class="inputtitle group_webui_theme hidden" data-i18n="lbl_webui_theme">WebUI Theme</span>
               <select type="text" id="themeId" name="themeId">
                 <option value="">Themes Load Here</option>
               </select>
@@ -101,6 +103,12 @@
               <select type="text" id="clockFontId" name="clockFontId">
                 <option value="">Clock Fonts Load Here</option>
               </select>
+            </div>
+          </div>
+          <div class="flex-row">
+            <div class="inputwrap center">
+              <span class="inputtitle" data-i18n="lbl_all_caps">All Caps</span>
+              <div class="checkbox" id="allcaps" data-command="allcaps"><div class="knob"></div></div>
             </div>
           </div>
           <div class="flex-row">
@@ -125,13 +133,15 @@
           </div>
           <div class="flex-row">
             <div class="inputwrap center">
-              <span class="inputtitle" data-i18n="lbl_all_caps">All Caps</span>
-              <div class="checkbox" id="allcaps" data-command="allcaps"><div class="knob"></div></div>
-            </div>
-            <div class="inputwrap center">
               <span class="inputtitle" data-i18n="lbl_volume_page">Volume Page</span>
               <div class="checkbox" id="volpg" data-command="volumepage"><div class="knob"></div></div>
             </div>
+            <div class="inputwrap center group_digitsglow hidden">
+              <span class="inputtitle" data-i18n="lbl_digitsglow">Digits Glow</span>
+              <div class="checkbox" id="digitsglow" data-command="digitsglow"><div class="knob"></div></div>
+            </div>
+          </div>
+          <div class="flex-row">
             <div class="inputwrap center group_buffer hidden">
               <span class="inputtitle" data-i18n="lbl_audio_buffer">Audio Buffer</span>
               <div class="checkbox" id="bufbar" data-command="bufferbar"><div class="knob"></div></div>
@@ -180,7 +190,12 @@
               <input type="range" id="dimbr" data-slaveid="sldimbrightnessinfo" data-command="dimmingbrightness" min="0" max="100" value="100">
             </div>
           </div>
-          <div class="row-title"><span data-i18n="ttl_screensaver">Screensaver</span></div>
+        </section>
+
+        <a name="screensaver"></a>
+        <section class="group_display hidden" id="group_screensaver">
+          <div class="title"><span data-i18n="ttl_screensaver">Screensaver</span></div>
+          <div class="reset" data-name="screensaver" title="reset"></div>
           <div class="flex-row">
             <div class="inputwrap center">
               <span class="inputtitle" data-i18n="lbl_while_not_playing">While Not Playing</span>
@@ -214,10 +229,16 @@
               <span class="inputtitle" data-i18n="lbl_full_time_screensaver">Full Time</span>
               <div class="checkbox ssoption" id="scrfull" data-command="screensaverfull"><div class="knob"></div></div>
             </div>
+            <div class="inputwrap center group_smaller hidden">
+              <span class="inputtitle" data-i18n="lbl_smaller_time_screensaver">Smaller Clock</span>
+              <div class="checkbox ssoption" id="scrsmall" data-command="screensaversmaller"><div class="knob"></div></div>
+            </div>
             <div class="inputwrap center">
-              <span class="inputtitle" data-i18n="lbl_screensaver_text">Info on Screensaver</span>
+              <span class="inputtitle" data-i18n="lbl_info_text_screensaver">Information Text</span>
               <div class="checkbox ssoption" id="scrtext" data-command="screensavertext"><div class="knob"></div></div>
             </div>
+          </div>
+          <div class="flex-row">
             <div class="inputwrap center group_vu_ss hidden">
               <span class="inputtitle" data-i18n="lbl_vu_screensaver">VU Screensaver</span>
               <div class="checkbox ssoption" id="scrvu" data-command="screensavervu"><div class="knob"></div></div>
@@ -235,6 +256,17 @@
               <select type="text" id="scrstyle" name="scrstyle">
                 <option value="">Styles Load Here</option>
               </select>
+            </div>
+          </div>
+          <div class="row-title group_deepsleep hidden"><span data-i18n="ttl_deep_sleep">Deep Sleep</span></div>
+          <div class="flex-row group_deepsleep hidden">
+            <div class="inputwrap center">
+              <span class="inputtitle" data-i18n="lbl_sleep_playing">Sleep Timer</span>
+              <div class="checkbox ssoption" id="scrtimer" data-command="sleeptimerenable"><div class="knob"></div></div>
+            </div>
+            <div class="inputwrap center">
+              <span class="inputtitle" data-i18n="lbl_timeout_min">Timeout (min)</span>
+              <input type="number" id="scrtimeout" data-command="sleeptimeout" value="" maxlength="3" min="5" max="1080" />
             </div>
           </div>
         </section>
@@ -288,7 +320,7 @@
             </div>
           </div>
           <div class="flex-row last">
-            <div class="fb hl local" data-command="applylocale" data-i18n="btn_apply_changes">Apply Changes</div>
+            <div class="fb hold local" data-command="applylocale" data-i18n="btn_apply_changes">Apply Changes</div>
           </div>
         </section>
 
@@ -390,7 +422,7 @@
             </div>
           </div>
           <div class="flex-row last">
-            <div class="fb hl local" data-command="applyweather" data-i18n="btn_apply_changes">Apply Changes</div>
+            <div class="fb hold local" data-command="applyweather" data-i18n="btn_apply_changes">Apply Changes</div>
           </div>
         </section>
 
@@ -419,14 +451,14 @@
               <span class="inputtitle" data-i18n="lbl_ehdp_name">ehDP Name</span>
               <input type="text" id="ehdpname" class="text" name="ehdpname" value="" maxlength="24" />
             </div>
-            <div class="fb hl local" data-command="ehdpsave" style=" margin-top: 24px; height: 37px;" data-i18n="btn_save">Save</div>
+            <div class="fb hold local" data-command="ehdpsave" style=" margin-top: 24px; height: 37px;" data-i18n="btn_save">Save</div>
           </div>
           <div class="flex-row" id="mdnsnamerow">
             <div class="inputwrap pad">
               <span class="inputtitle" data-i18n="lbl_mdns_name_no_local">mDNS Name (do not add '.local')</span>
               <input type="text" id="mdns" class="text" name="mdnsname" value="" maxlength="24" />
             </div>
-            <div class="fb hl local" data-command="restartmdns" style=" margin-top: 24px; height: 37px;" data-i18n="btn_save">Save</div>
+            <div class="fb hold local" data-command="restartmdns" style=" margin-top: 24px; height: 37px;" data-i18n="btn_save">Save</div>
           </div>
           <div class="row-title"><span data-i18n="ttl_update">Update</span></div>
           <div class="flex-row">
@@ -497,7 +529,7 @@
           <div class="flex-row last">
             <input id="file-upload" type="file" accept=".txt, .csv" hidden/>
             <div class="fb local group_system hidden" data-command="wifiexport" data-i18n="btn_export">Export</div>
-            <div class="fb hl local" data-command="wifiupload" data-i18n="btn_save_reboot">Save & Reboot</div>
+            <div class="fb local" data-command="wifiupload" data-i18n="btn_save_reboot">Save & Reboot</div>
           </div>
         </section>
 
@@ -542,7 +574,7 @@
               </div>
             </div>
             <div class="flex-row last">
-              <div class="fb hl local" data-command="applymqtt" data-i18n="btn_apply_changes">Apply Changes</div>
+              <div class="fb hold local" data-command="applymqtt" data-i18n="btn_apply_changes">Apply Changes</div>
             </div>
           </div>
         </section>
@@ -562,10 +594,10 @@
               <span class="inputtitle" data-i18n="lbl_calibrate">Calibrate (Measured mV)</span>
               <input type="number" id="battref" class="text" name="battref" value="" min="2500" max="4500" placeholder="Multimeter reading" data-i18n="lbl_battref" />
             </div>
-            <div class="fb hl local" data-command="savebattref" style="margin-top: 24px; height: 37px;" data-i18n="btn_calibrate">Calibrate</div>
+            <div class="fb hold local" data-command="savebattref" style="margin-top: 24px; height: 37px;" data-i18n="btn_calibrate">Calibrate</div>
           </div>
           <div class="flex-row center" style="padding-bottom: 0;">
-            <div style="font-size:12px;color:#999;max-width:520px;text-align:center;">
+            <div style="font-size:12px;color:var(--caption-text);max-width:520px;text-align:center;">
               <span data-i18n="lbl_batt_cal_hint">Measure battery voltage across the battery terminals with a multimeter (DC mV) while the device is idle / not charging. Enter the reading in mV and press</span>&nbsp;<strong data-i18n="btn_calibrate">calibrate</strong>.
             </div>
           </div>
@@ -591,7 +623,14 @@
           </div>
         </div>
 
-        <div class="flex-row center hidden" id="dangerzone">
+        <div class="flex-row center dangerzone hidden">
+          <div class="fb tool local group_display hidden" data-command="editor">
+            <div class="group_tft hidden" data-i18n="btn_theme_editor">Theme Editor</div>
+            <div class="group_tft hidden">&</div>
+            <div data-i18n="btn_layout_editor">Layout Editor</div>
+          </div>
+        </div>
+        <div class="flex-row center dangerzone hidden">
           <div class="inputwrap center">
             <div class="fb tool local" data-command="confirm-reboot" title="Reboot ESP" data-i18n="btn_reboot">Reboot</div>
           </div>
@@ -632,4 +671,3 @@
       <span id="version"></span>
       <span id="update_available" class="hidden">| <a href="/update.html" data-i18n="msg_update_available">Update Available</a></span>
     </div>
-    

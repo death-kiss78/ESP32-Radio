@@ -6,6 +6,7 @@
 #include "config.h"
 #include "controls.h"
 #include "display.h"
+#include "../displays/dspcore.h"
 #include "logging.h"
 #include "mqtt.h"
 #include "netserver.h"
@@ -36,7 +37,7 @@ bool CommandHandler::isBlockedForSource(const char *command, CommandSource sourc
 
   return cmdIs(command,
     "getindex", "getactive",
-    "getsystem", "getscreen", "getlocale", "getcontrols", "getweather", "getmqtt", "getbattery",
+    "getsystem", "getscreen", "getscreensaver", "getlocale", "getcontrols", "getweather", "getmqtt", "getbattery",
     "curated_import", "loadindex", "loadplaylist",
     "newmode", "locale_webui", "plvalidate",
     "irbtn", "chkid", "irclr"
@@ -62,7 +63,7 @@ bool CommandHandler::exec(const char *command, const char *value, uint8_t cid, C
   // mid-sweep able to populate itself.
   if (playlistValidator.active() &&
       !cmdIs(command, "plvalidate",
-             "getindex", "getactive", "getsystem", "getscreen", "getlocale",
+             "getindex", "getactive", "getsystem", "getscreen", "getscreensaver", "getlocale",
              "getweather", "getcontrols", "getmqtt", "getbattery"))
     return false;
 
@@ -100,7 +101,7 @@ bool CommandHandler::exec(const char *command, const char *value, uint8_t cid, C
     if (cmdIs(command, "sleep")) {
       if (value[0] == '\0') {
         network.cancelStreamRetry();
-        utility.doSleepW();
+        utility.requestSleep();   // the message is shown and held by serviceSleep(), then the device sleeps
         return true;
       }
       int sfor = 0;
@@ -141,9 +142,10 @@ bool CommandHandler::exec(const char *command, const char *value, uint8_t cid, C
   if (cmdIs(command, "clearfs"))     { utility.pruneLittleFS(); config.saveValue(&config.store.play_mode, static_cast<uint8_t>(PM_WEB)); return true; }
 
   /* Options: Load Settings */
-  if (cmdIs(command, "getcontrols")) { netserver.requestOnChange(GETCONTROLS, cid); return true; }
-  if (cmdIs(command, "getscreen"))   { netserver.requestOnChange(GETSCREEN, cid); return true; }
-  if (cmdIs(command, "getlocale"))   { netserver.requestOnChange(GETLOCALE, cid); return true; }
+  if (cmdIs(command, "getcontrols"))    { netserver.requestOnChange(GETCONTROLS, cid); return true; }
+  if (cmdIs(command, "getscreen"))      { netserver.requestOnChange(GETSCREEN, cid); return true; }
+  if (cmdIs(command, "getscreensaver")) { netserver.requestOnChange(GETSCREENSAVER, cid); return true; }
+  if (cmdIs(command, "getlocale"))      { netserver.requestOnChange(GETLOCALE, cid); return true; }
   if (cmdIs(command, "getweather"))  { netserver.requestOnChange(GETWEATHER, cid); return true; }
   if (cmdIs(command, "getsystem"))   { netserver.requestOnChange(GETSYSTEM, cid); return true; }
   if (cmdIs(command, "getmqtt"))     { netserver.requestOnChange(GETMQTT, cid); return true; }
@@ -162,39 +164,28 @@ bool CommandHandler::exec(const char *command, const char *value, uint8_t cid, C
   if (cmdIs(command, "invertdisplay")) { config.saveValueButWait(&config.store.invertdisplay, static_cast<bool>(atoi(value)), 5000); return true; } //display.invert();
   if (cmdIs(command, "inverttitle"))   { config.saveValueButWait(&config.store.inverttitle, static_cast<bool>(atoi(value)), 5000); display.applyTheme(config.store.themeId); return true; }
   if (cmdIs(command, "layout"))        { uint8_t id = constrain(atoi(value), 0, display.getLayoutCount() - 1); config.saveValueButWait(&config.store.layoutId, id, 5000); display.applyLayout(id); netserver.requestOnChange(GETACTIVE, 0); return true; }
-  if (cmdIs(command, "theme"))         { uint8_t id = constrain(atoi(value), 0, display.getThemeCount() - 1); config.saveValueButWait(&config.store.themeId, id, 5000); display.applyTheme(id); netserver.requestOnChange(GETACTIVE, 0); return true; }
+  if (cmdIs(command, "theme")) {
+    uint8_t id = constrain(atoi(value), 0, display.getThemeCount() - 1);
+    config.saveValueButWait(&config.store.themeId, id, 5000);
+    #if defined(DSP_TFT)
+      display.applyTheme(id);
+    #endif
+    netserver.requestOnChange(GETACTIVE, 0);
+    return true;
+  }
   if (cmdIs(command, "sysfont"))       { uint8_t id = constrain(atoi(value), 0, display.getSystemFontCount() - 1); config.saveValueButWait(&config.store.systemFontId, id, 5000); display.applySystemFont(id); netserver.requestOnChange(GETACTIVE, 0); return true; }
   if (cmdIs(command, "clockfont"))     { uint8_t id = constrain(atoi(value), 0, display.getClockFontCount() - 1); config.saveValueButWait(&config.store.clockFontId, id, 5000); display.applyClockFont(id); netserver.requestOnChange(GETACTIVE, 0); return true; }
+  if (cmdIs(command, "allcaps"))       { config.saveValueButWait(&config.store.pretextALLCAPS, static_cast<bool>(atoi(value)), 5000); display.putRequest(APPLYSTATE); return true; }
   if (cmdIs(command, "numplaylist"))   { config.saveValueButWait(&config.store.numplaylist, static_cast<bool>(atoi(value)), 5000); display.putRequest(NEWMODE, CLEAR); display.putRequest(NEWMODE, PLAYER); return true; }
   if (cmdIs(command, "playlistpages")) { config.saveValueButWait(&config.store.playlistPages, static_cast<bool>(atoi(value)), 5000); display.putRequest(APPLYSTATE); return true; }
   if (cmdIs(command, "clock12"))       { config.saveValueButWait(&config.store.clock12, static_cast<bool>(atoi(value)), 5000); display.putRequest(CLOCK); return true; }
   if (cmdIs(command, "clockglow"))     { config.saveValueButWait(&config.store.clockglow, static_cast<bool>(atoi(value)), 5000); display.putRequest(APPLYSTATE); return true; }
-  if (cmdIs(command, "allcaps"))       { config.saveValueButWait(&config.store.pretextALLCAPS, static_cast<bool>(atoi(value)), 5000); display.putRequest(APPLYSTATE); return true; }
+  if (cmdIs(command, "digitsglow"))    { config.saveValueButWait(&config.store.digitsglow, static_cast<bool>(atoi(value)), 5000); display.putRequest(APPLYSTATE); return true; }
   if (cmdIs(command, "volumepage"))    { config.saveValueButWait(&config.store.volumepage, static_cast<bool>(atoi(value)), 5000); display.putRequest(NEWMODE, PLAYER); return true; }
   if (cmdIs(command, "bufferbar"))     { config.saveValueButWait(&config.store.bufferbar, static_cast<bool>(atoi(value)), 5000); display.putRequest(SHOWBUFFERBAR); return true; }
   if (cmdIs(command, "vumeter"))       { config.saveValueButWait(&config.store.vumeter, static_cast<bool>(atoi(value)), 5000); display.putRequest(SHOWVUMETER); return true; }
   if (cmdIs(command, "vupeaks"))       { config.saveValueButWait(&config.store.vupeak, static_cast<bool>(atoi(value)), 5000); return true; }
   if (cmdIs(command, "vustyle"))       { uint8_t id = constrain(atoi(value), 0, VU_STYLE_COUNT - 1); config.saveValueButWait(&config.store.vustyle, id, 5000); display.putRequest(SHOWVUMETER); return true; }
-  /* The screensaver commands' shared route: apply the change where it is visible */
-  auto screensaverHelper = []() {
-    const uint8_t mode = (uint8_t)display.mode();
-    const bool up = (mode == SCREENSAVER || mode == SCREENBLANK);
-    // The switch that governs depends on whether anything is playing; with it off the screensaver should
-    // not be up at all, so only then is the screen sent back to the player.
-    const bool wanted = player.isRunning() ? config.store.screensaverPlayingEnabled
-                                           : config.store.screensaverEnabled;
-    if (up && wanted) {
-      // Blank or picture as the switches now read - the same choice network.cpp makes when the countdown
-      // fires, so toggling Blank takes effect here instead of on the next entry.  The request is a rebuild,
-      // not a mode change: _switchMode() drops a request for the mode already in use and any request at all
-      // while the network is transient, and either would leave the old picture running.
-      const bool blank = player.isRunning() ? config.store.screensaverPlayingBlank
-                                            : config.store.screensaverBlank;
-      display.putRequest(SSREBUILD, blank ? SCREENBLANK : SCREENSAVER);
-      return;
-    }
-    display.putRequest(NEWMODE, PLAYER);
-  };
   if (cmdIs(command, "brightness", "dim")) {
     if (!config.store.dspon) netserver.requestOnChange(DSPON, 0);
     int bri=atoi(value);
@@ -219,17 +210,43 @@ bool CommandHandler::exec(const char *command, const char *value, uint8_t cid, C
   }
   if (cmdIs(command, "dimmingtimeout"))            { config.saveValue(&config.store.dimmingTimeout, static_cast<uint16_t>(constrain(atoi(value), 5, 65520))); backlightControls.restart(); return true; }
   if (cmdIs(command, "screenon", "dspon"))         { config.setDspOn(static_cast<bool>(atoi(value))); backlightControls.restart(); return true; }
-  if (cmdIs(command, "screensaverenabled"))        { config.saveValue(&config.store.screensaverEnabled, static_cast<bool>(atoi(value))); screensaverHelper(); return true; }
+
+  /* The screensaver commands' shared route: apply the change where it is visible */
+  auto screensaverHelper = []() {
+    const uint8_t mode = (uint8_t)display.mode();
+    const bool up = (mode == SCREENSAVER || mode == SCREENBLANK);
+    // The switch that governs depends on whether anything is playing; with it off the screensaver should
+    // not be up at all, so only then is the screen sent back to the player.
+    const bool wanted = player.isRunning() ? config.store.screensaverPlayingEnabled
+                                           : config.store.screensaverEnabled;
+    if (up && wanted) {
+      // Blank or picture as the switches now read - the same choice network.cpp makes when the countdown
+      // fires, so toggling Blank takes effect here instead of on the next entry.  The request is a rebuild,
+      // not a mode change: _switchMode() drops a request for the mode already in use and any request at all
+      // while the network is transient, and either would leave the old picture running.
+      const bool blank = player.isRunning() ? config.store.screensaverPlayingBlank
+                                            : config.store.screensaverBlank;
+      display.putRequest(SSREBUILD, blank ? SCREENBLANK : SCREENSAVER);
+      return;
+    }
+    display.putRequest(NEWMODE, PLAYER);
+  };
+
+  /* Options: Screensaver */
+  if (cmdIs(command, "screensaverenabled"))        { config.saveValue(&config.store.screensaverEnabled, static_cast<bool>(atoi(value))); screensaverHelper(); netserver.requestOnChange(GETACTIVE, 0); return true; }
   if (cmdIs(command, "screensaverblank"))          { config.saveValue(&config.store.screensaverBlank, static_cast<bool>(atoi(value))); screensaverHelper(); return true; }
   if (cmdIs(command, "screensavertimeout"))        { config.saveValue(&config.store.screensaverTimeout, static_cast<uint16_t>(constrain(atoi(value), 5, 65520))); screensaverHelper(); return true; }
-  if (cmdIs(command, "screensaverplayingenabled")) { config.saveValue(&config.store.screensaverPlayingEnabled, static_cast<bool>(atoi(value))); screensaverHelper(); return true; }
+  if (cmdIs(command, "screensaverplayingenabled")) { config.saveValue(&config.store.screensaverPlayingEnabled, static_cast<bool>(atoi(value))); screensaverHelper(); netserver.requestOnChange(GETACTIVE, 0);return true; }
   if (cmdIs(command, "screensaverplayingblank"))   { config.saveValue(&config.store.screensaverPlayingBlank, static_cast<bool>(atoi(value))); screensaverHelper(); return true; }
   if (cmdIs(command, "screensaverplayingtimeout")) { config.saveValue(&config.store.screensaverPlayingTimeout, static_cast<uint16_t>(constrain(atoi(value), 1, 1080))); screensaverHelper(); return true; }
   if (cmdIs(command, "screensaverfull"))           { config.saveValue(&config.store.screensaverFullDateTime, static_cast<bool>(atoi(value))); screensaverHelper(); return true; }
+  if (cmdIs(command, "screensaversmaller"))        { config.saveValue(&config.store.screensaverClockSmaller, static_cast<bool>(atoi(value))); screensaverHelper(); return true; }
   if (cmdIs(command, "screensavertext"))           { config.saveValue(&config.store.screensaverText, static_cast<bool>(atoi(value))); screensaverHelper(); netserver.requestOnChange(GETACTIVE, 0); return true; }
   if (cmdIs(command, "screensavervu"))             { config.saveValue(&config.store.screensaverVU, static_cast<bool>(atoi(value))); screensaverHelper(); netserver.requestOnChange(GETACTIVE, 0); return true; }
   if (cmdIs(command, "screensavervustyle"))        { config.saveValue(&config.store.screensaverVUStyle, static_cast<uint8_t>(constrain(atoi(value), 0, VU_STYLE_COUNT - 1))); screensaverHelper(); netserver.requestOnChange(GETACTIVE, 0); return true; }
   if (cmdIs(command, "screensavervupeak"))         { config.saveValue(&config.store.screensaverVUpeak, static_cast<bool>(atoi(value))); screensaverHelper(); return true; }
+  if (cmdIs(command, "sleeptimerenable"))          { config.saveValue(&config.store.sleeptimer, static_cast<bool>(atoi(value))); config.sleepTicks = 0; return true; }
+  if (cmdIs(command, "sleeptimeout"))              { config.saveValue(&config.store.sleepSsTimeout, static_cast<uint16_t>(constrain(atoi(value), 5, 1080))); config.sleepTicks = 0; return true; }
 
   /* Options: Locale */
   if (cmdIs(command, "locale_webui")) { config.saveValue(config.store.locale_webui, value); return true; }

@@ -106,6 +106,7 @@ class Display {
     ScrollWidget *_sstext = nullptr;
     bool _ssFailed = false;
     bool _ssMeterUp = false;
+    uint32_t _ssHoldUntil = 0;
     NumWidget *_nums = nullptr;
     ClockWidget *_clock = nullptr;
     Page *_boot = nullptr;
@@ -117,6 +118,9 @@ class Display {
     #endif
     Ticker _returnTicker;
     bool _locked = false;
+    // An SD re-index owns the panel while this is up (SDINDEXSTART / SDINDEXDONE).  It is written and cleared ONLY by
+    // this task, which is what makes the release impossible to refuse: see the guard in _switchMode().
+    bool _indexHold = false;
     uint8_t _bootStep = 0;
     displayRequestType_e _deferredType = NOPE;
     int _deferredPayload = 0;
@@ -128,15 +132,22 @@ class Display {
     void _setLayoutPointers();
     void _syncLineRule(FillWidget*& w, const FillConfig* conf, bool under);
     void _applyMetaInvert();
-    // A staged mode is the editor's live preview: the same re-init, but the current page is refilled where
-    // it stands instead of the device being sent to the player page, so nothing else changes.
     void _applyState(applyMode_e mode = APPLY_STORED);
     void _showDialog(const char *title);
-    void _showNumbers(const char* header, int32_t value, const char* fmt, bool dialogPage);
+    void _showNumbers(const char* header, int32_t value, const char* fmt, bool dialogPage, uint32_t fieldmax = 0);
     void _setReturnTicker(uint8_t time_s);
     bool _ownScreen() const;
     bool _drawsOverOwnScreen(displayRequestType_e type) const;
-    // Widget visibility = runtime state AND active layout, decided in one place.
+    // The footer sub-page's widgets, in insertion order, one bit each.  A bitmask rather than six flags because
+    // ONE table decides which screen keeps which, and every reader asks that table the same question.
+    enum FooterWidget_e : uint8_t {
+      FW_VOLBAR = 1u << 0, FW_VOLTXT = 1u << 1, FW_VOLIP = 1u << 2,
+      FW_BATT   = 1u << 3, FW_RSSI   = 1u << 4, FW_BUFBAR = 1u << 5,
+      FW_ALL    = FW_VOLBAR | FW_VOLTXT | FW_VOLIP | FW_BATT | FW_RSSI | FW_BUFBAR
+    };
+    uint8_t _footerMask() const;
+    bool _footerShown(uint8_t bit) const { return (_footerMask() & bit) != 0; }
+    void _applyFooter();
     bool _clockHidden();
     bool _weatherHidden();
     void _switchMode(displayMode_e newmode);
@@ -147,7 +158,9 @@ class Display {
     uint16_t _ssContentH();
     uint16_t _ssTextTop();
     void _screensaverLine();
+    void _ssHoldLine(uint32_t ms);
     void _screensaverWidgets();
+    void _screensaverClockTarget(MoveConfig& mv);
     void _enterScreensaver(displayMode_e mode);
     void _buildJsonCache();
     void _buildThemeListJson();

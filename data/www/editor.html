@@ -5,10 +5,11 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Theme and Layout Editor</title>
 <link rel="stylesheet" href="style.css">
+<script src="variables.js"></script>
 <script src="conf.js"></script>
 <style>
-  /* Only the rules this page needs.  theme.css is deliberately left out: the colour fields must show
-     the theme's own values, not the WebUI's palette, and nothing here is trying to look dressed up. */
+  /* Only the rules this page needs.  The palette is style.css's, driven by variables.js like every
+     other page; the colour fields still show the theme's own values, never the palette's. */
   #editorwrap { max-width: 900px; margin: 0 auto; padding: 10px; }
   /* Twice the body size: the two halves of the page are what the eye has to find first. */
   #editorwrap h3 { margin: 4px 0 10px; font-size: 2em; }
@@ -27,6 +28,9 @@
      of the editor rather than as a caption. */
   .info { font-size: 115%; opacity: .75; margin: 0 0 8px; }
   .hint { opacity: .75; font-size: 90%; }
+  /* The flashing note at the foot of each half - the card names' own size (.cname is 115% too), bold and italic
+     so it reads as a footnote rather than as one more row of controls. */
+  .footnote { font-size: 115%; font-weight: bold; font-style: italic; margin: 12px 0 2px; }
   /* One size for the whole table.  The cells used to be 92% while a form control kept the user agent's
      own size - and a control does not inherit font size - so the two columns could never match. */
   #grid { border-collapse: collapse; width: 100%; font-size: 115%; }
@@ -41,7 +45,10 @@
      it is the column that changes and not the page - so it is only a pointer and a hint on hover. */
   #elemhead { cursor: pointer; }
   #elemhead:hover { text-decoration: underline dotted; }
-  #tname { width: 22em; }
+  #tname, #lname { width: 22em; max-width: 100%; margin-top: 0; background: #fff; color: #000;
+                   border: 1px solid #888; border-radius: 3px; }
+  #tname:focus, #lname:focus { outline: 2px solid #4a90d9; outline-offset: -1px; }
+  #tname::placeholder, #lname::placeholder { color: #888; opacity: 1; }
   #msg, #lmsg { min-height: 1.4em; margin: 2px 0 10px; }
   #msg.good, #lmsg.good { color: rgb(0, 240, 0); }
   #msg.bad, #lmsg.bad { color: rgb(255, 0, 0); }
@@ -78,6 +85,12 @@
           border-radius: 3px; color: inherit; cursor: pointer; }
   .rbtn + .rbtn { margin-left: 10px; }
   .rbtn:hover { border-color: #bbb; }
+  /* Copy / paste on a colour row.  They are always on screen - this table is long, and a control that appears only
+     under the pointer would be a hunt down a column.  Their glyphs never change colour.  Only the PASTE box takes the
+     clipboard's own colour (--clip, set on #grid by the copy), and only while the pointer is on it; the copy box keeps
+     the ordinary #bbb hover, because a copy icon drawn in the colour reads as if it held one itself. */
+  .clippair { margin-right: 10px; }
+  #grid.hasclip .clippair .pastebtn:hover { border-color: var(--clip); }
   #grid th.acts, #grid td.acts { width: 1%; white-space: nowrap; }
 </style>
 </head>
@@ -121,6 +134,8 @@
     </thead>
     <tbody id="body"></tbody>
   </table>
+
+  <div class="footnote">Exported single themes may be placed in the /data/data folder as theme1.json, theme2.json... theme10.json when flashing the file system.  Do not use the backup .json.</div>
   </section>
 
   <section id="laybox">
@@ -165,6 +180,8 @@
   <div id="lmsg" class="hint"></div>
 
   <div id="laycards"></div>
+
+  <div class="footnote">Exported single layouts may be placed in the /data/data folder as layout1.json, layout2.json... layout10.json when flashing the file system.  Do not use the backup .json.</div>
   </section>
 </div>
 
@@ -192,13 +209,20 @@ var MSG = null;
 var LOADED = null;
 // Reset (undo) and Clear (trash), as text: no image, no icon font, and the same glyphs the layout cards use.
 var BTN_RESET = '\u238C', BTN_CLEAR = '\uD83D\uDDD1';
+// Copy / paste for a colour row.  The arrow points LEFT here because the cells it writes - Red, Green, Blue - are to
+// the left of the buttons; in webui_tool.html the circle is to their right, so there it points right.
+var BTN_COPY = '\uD83D\uDDD0', BTN_PASTE = '\u21E4';
+// The copied colour, as its 565 value: the device's own unit, so a copy/paste pair moves exactly what the row holds.
+// null means nothing has been copied yet.
+var CLIP = null;
 
 // One builder for the two little buttons that sit on every row and every card.  type=button so a stray Enter
-// inside a card can never submit anything, and the title is the whole explanation.
-function actButton(glyph, title, fn) {
+// inside a card can never submit anything, and the title is the whole explanation.  `extra` is a second class for
+// the one button that is not an ordinary one: the paste chip, whose hover it needs to pick out of the pair.
+function actButton(glyph, title, fn, extra) {
   var b = document.createElement('button');
   b.type = 'button';
-  b.className = 'rbtn';
+  b.className = extra ? 'rbtn ' + extra : 'rbtn';
   b.textContent = glyph;
   b.title = title;
   b.addEventListener('click', fn);
@@ -284,10 +308,20 @@ function buildGrid() {
     tdV.className = 'v565';
     row.appendChild(tdV);
 
-    // Reset's own column, at the END so it never moves as the numbers change width.  No Clear: an element's
-    // "nothing" IS black, which is what Reset already puts back.
+    // Copy, paste and Reset, in their own column at the END so it never moves as the numbers change width.  No
+    // Clear: an element's "nothing" IS black, which is what Reset already puts back.  Copy and paste share one span
+    // so they keep a single gap between them; only the paste box takes the clipboard's colour on hover.
     var tdA = document.createElement('td');
     tdA.className = 'acts';
+    var pair = document.createElement('span');
+    pair.className = 'clippair';
+    // Paste then copy - the arrow first, then what puts something there, then Reset: the order asked for, and the
+    // arrow sits on the side its colour comes from.
+    pair.appendChild(actButton(BTN_PASTE, 'Paste the clipboard colour into this element',
+                               function() { pasteRow(rowIndex); }, 'pastebtn'));
+    pair.appendChild(actButton(BTN_COPY, "Copy this element's colour to the clipboard",
+                               function() { copyRow(rowIndex); }));
+    tdA.appendChild(pair);
     tdA.appendChild(actButton(BTN_RESET, 'Put this element back to what was loaded',
                               function() { resetRow(rowIndex); }));
     row.appendChild(tdA);
@@ -318,6 +352,30 @@ function resetRow(i) {
   var v = (LOADED && LOADED.colors) ? LOADED.colors[ELEM[i].key] : 0;
   setRow(i, v);
   onEdit(i);
+}
+
+// --- the colour clipboard ---------------------------------------------------
+// A row's colour as its 565 value, so nothing is rounded twice: what is copied is what is pasted, and it is the same
+// number the device stores.  The hex is only ever for the paste box's hover colour and the note that says what
+// happened.
+function clipHex() {
+  var rgb = v565ToRgb(CLIP);
+  return '#' + ((1 << 24) + (rgb[0] << 16) + (rgb[1] << 8) + rgb[2]).toString(16).slice(1);
+}
+
+function copyRow(i) {
+  CLIP = row565(i);
+  var grid = document.getElementById('grid');
+  grid.style.setProperty('--clip', clipHex());   // the paste box's hover colour, set once for the whole table
+  grid.classList.add('hasclip');
+  msg('Copied ' + clipHex().toUpperCase() + ' from ' + ELEM[i].label + '.', false);
+}
+
+function pasteRow(i) {
+  if (CLIP === null) { msg('Nothing copied yet - use ' + BTN_COPY + ' on a row first.', true); return; }
+  setRow(i, CLIP);                                // levels and swatch, exactly as a typed edit would
+  onEdit(i);                                      // paints the row and queues the preview
+  msg('Pasted ' + clipHex().toUpperCase() + ' into ' + ELEM[i].label + '.', false);
 }
 
 
@@ -836,10 +894,16 @@ function buildCards() {
         } else {
           inp = document.createElement('input');
           inp.type = 'number';
-          inp.min = '0';
+          // A text size of 0 is only meaningful where the field declares it a SIZE INDEX (CONF_FONT_INDEX: the
+          // clock and the large number, where 0 IS the system font).  Everywhere else the cell multiplies the
+          // system font's own cell, and a 0 there collapses the row - worse, the scroll lines read 0 as "not
+          // initialised yet" and stay half-built, which is what crashed the device.  The device clamps it too.
+          inp.min = (c.key === 'fontsize' && !(f.flags & CONF_FONT_INDEX)) ? '1' : '0';
           if (c.key === 'fontsize' && (f.flags & CONF_FONT_INDEX)) {
             inp.max = '4';
             inp.title = '0 is the system font, 1..4 are 15/35/52/70 px';
+          } else if (c.key === 'fontsize') {
+            inp.title = '1 to 4: the system font at one to four times its size';
           }
         }
         if (unused) {
@@ -939,10 +1003,15 @@ function clampEdited(ev) {
   var inp = ev.target;
   var field = LCARDS[inp.dataset.field];
   if (!field) return;
-  var m = cellMax(field, inp.dataset.cell);
-  if (m === null) return;
   var v = parseInt(inp.value, 10);
-  if (!isNaN(v) && v > m) inp.value = String(m);
+  if (isNaN(v)) return;
+  // The cell's own floor first, and whether or not the cell has a panel-derived ceiling: a font size below 1
+  // where the cell multiplies the system font is the value the device has to clamp, so the page does not offer
+  // it.  Typed or pasted, not only spun.
+  var lo = parseInt(inp.min, 10);
+  if (!isNaN(lo) && v < lo) { inp.value = String(lo); v = lo; }
+  var m = cellMax(field, inp.dataset.cell);
+  if (m !== null && v > m) inp.value = String(m);
 }
 
 function fillLayout(doc) {

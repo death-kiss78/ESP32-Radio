@@ -48,6 +48,7 @@ Order and sections match that file.
 | --- | --- |
 | `getcontrols` | Request controls settings payload. Blocked in HTTP/MQTT/Telnet. |
 | `getscreen` | Request screen settings payload. Blocked in HTTP/MQTT/Telnet. |
+| `getscreensaver` | Request screensaver settings payload. Blocked in HTTP/MQTT/Telnet. |
 | `getlocale` | Request locale settings payload. Blocked in HTTP/MQTT/Telnet. |
 | `getweather` | Request weather settings payload. Blocked in HTTP/MQTT/Telnet. |
 | `getsystem` | Request system settings payload. Blocked in HTTP/MQTT/Telnet. |
@@ -70,9 +71,8 @@ Order and sections match that file.
 The layout, theme and font commands all take an **index, 0-based**: the lists are built in table order,
 so the first layout is `layout=0`. A value past the end of a list is clamped to its **last** entry, the
 same four ways - the two font commands clamp to the number of fonts that build actually has, not to a
-fixed number. `vustyle` and `screensavervustyle` take the ids `/visuals.json` publishes, and they are
-deliberately **two independent settings**: the box on the player page and a meter covering the whole
-panel are different pictures, so nothing keeps them in step.
+fixed number. `vustyle` takes the ids `/visuals.json` publishes; the screensaver's own style is a
+separate setting, documented below.
 
 | Command(s) | Action |
 | --- | --- |
@@ -87,6 +87,7 @@ panel are different pictures, so nothing keeps them in step.
 | `clock12` | Toggle 12-hour clock display and refresh clock. |
 | `clockglow` | Enable/disable the clock's glow. Saved, then the whole display is re-initialised. |
 | `volumepage` | Toggle dedicated volume page behavior and refresh player view. |
+| `digitsglow` | Enable/disable the big number's glow (volume, station and SD counter, zero-filled when on). Saved, then the whole display is re-initialised. |
 | `bufferbar` | Enable/disable the buffer bar on the display. |
 | `vumeter` | Enable/disable VU meter and refresh display state. |
 | `vupeaks` | Enable/disable the VU meter peak markers (or XY axis lines). |
@@ -96,6 +97,15 @@ panel are different pictures, so nothing keeps them in step.
 | `dimmingbrightness` | Set dimmed brightness (0..100, clamped to the current brightness setting). |
 | `dimmingtimeout` | Set idle dimming timeout (5..65520). |
 | `screenon`, `dspon` | Turn display on/off and reset dimming state. |
+
+## Options: Screensaver
+
+`vustyle` and `screensavervustyle` take the ids `/visuals.json` publishes, and they are deliberately
+**two independent settings**: the box on the player page and a meter covering the whole panel are
+different pictures, so nothing keeps them in step.
+
+| Command(s) | Action |
+| --- | --- |
 | `screensaverenabled` | Enable/disable idle screensaver behavior. |
 | `screensaverblank` | Enable/disable idle screensaver blanking behavior. |
 | `screensavertimeout` | Set idle screensaver timeout in seconds (5..65520). |
@@ -103,10 +113,13 @@ panel are different pictures, so nothing keeps them in step.
 | `screensaverplayingblank` | Enable/disable playing screensaver blanking behavior. |
 | `screensaverplayingtimeout` | Set playing screensaver timeout in minutes (1..1080). |
 | `screensaverfull` | Enable/disable full time on the screensaver. |
+| `screensaversmaller` | Draw the screensaver clock one size rung below the layout's own, never below index 0 (the built-in font). |
 | `screensavertext` | Show/hide the screensaver's info line: station name, 2 title lines, and weather (if enabled). |
 | `screensavervu` | Draw the VU full screen as the screensaver instead of the moving clock. |
 | `screensavervustyle` | Select the style that full-screen meter draws (numeric, 0-based, clamped to the known range, same as `vustyle`). |
 | `screensavervupeak` | Show/hide the peak markers and the axis or reference lines on that full-screen meter (independent of `vupeaks`). |
+| `sleeptimerenable` | Enable/disable the deep-sleep timer. Saved, and the sleep countdown restarts. |
+| `sleeptimeout` | Set the deep-sleep timeout in minutes (5..1080), counted from the same idle point as the screensaver timeout. Not available if `DEEP_SLEEP_DISABLE` is in `myoptions.h` or no wake pins are configured. |
 
 ## Options: Locale
 
@@ -173,7 +186,7 @@ panel are different pictures, so nothing keeps them in step.
 | --- | --- |
 | `reboot`, `boot` | Reboot device immediately. |
 | `format` | Stop playback, format LittleFS, reboot device. |
-| `reset` | Apply default settings reset flow by requested section/value. |
+| `reset` | Apply default settings reset flow by requested section/value (`screen`, `screensaver`, ...). |
 
 ## IR Recorder
 
