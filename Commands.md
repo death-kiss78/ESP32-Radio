@@ -29,7 +29,7 @@ Order and sections match that file.
 | `start` | Start playback from last station. |
 | `stop` | Stop playback. |
 | `plvalidate` | Start (`1`) or stop (`0`) the playlist Validator sweep. Blocked in HTTP/MQTT/Telnet. |
-| `sleep` | Set sleep timer using for,after values (may be disabled by build) |
+| `sleep` | Set sleep timer using `sleep` (wake duration) and `after` (delay before sleep), in minutes; `0,0` enters deep sleep immediately without a timer wake (may be disabled by build). |
 | `mode` | Change playback mode: `0` = Radio/Web, `1` = SD card, out-of-range values cycle modes (`2` cycles in Telnet). |
 | `submitplaylist` | Stop playback before playlist submit flow. |
 | `submitplaylistdone` | Finalize playlist submit flow, reload best station target, and trigger MQTT playlist sync. |
@@ -252,8 +252,8 @@ Handled in src/core/telnet.cpp before commandhandler dispatch.
 - HTTP single-command examples: `http://<radio-ip>/?toggle=1` and `curl "http://<radio-ip>/?volume=80"`
 - HTTP multi-param behavior: params are processed in URL order, each as a separate commandhandler dispatch.
 - HTTP multi-param example: `http://<radio-ip>/?volume=70&treble=4&bass=-2`
-- HTTP sleep behavior: `sleep` is the wake-up duration in minutes; `after` is the delay before entering sleep.
-- HTTP sleep examples: `http://<radio-ip>/?sleep=30`, `http://<radio-ip>/?sleep=30&after=5`, and
+- HTTP sleep behavior: `sleep` is the wake-up duration in minutes; `after` is the delay before entering sleep. `sleep=0&after=0` enters deep sleep immediately without a timer wake.
+- HTTP sleep examples: `http://<radio-ip>/?sleep=30`, `http://<radio-ip>/?sleep=30&after=5`, `http://<radio-ip>/?sleep=0&after=0`, and
   `http://<radio-ip>/?sleep&after=5` or `http://<radio-ip>/?sleep=0&after=5` for sleep without a wake timer.
 - MQTT and Telnet command formats: `key=value`, `key value`, `key(value)`.
 - MQTT examples (topic <mqtttopic>command): payload `toggle`, payload `volume=80`, payload `play 12`, payload `http://example.com/stream`

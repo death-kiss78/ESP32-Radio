@@ -4,6 +4,12 @@
   { "type": "locale_select", "name": "Display Locale", "define": "DSP_LOCALE" },
   { "type": "timezone_select", "name": "Time Zone", "define": "TIMEZONE" },
   {
+    "name": "Initial mDNS Hostname",
+    "define": "MDNS_HOST", "type": "text", "optional": true,
+    "comment": "Hostname without the .local suffix. If left blank, the firmware uses the chip ID.",
+    "omit_if_empty": true
+  },
+  {
     "name": "Clock 12 Hour Mode",
     "define": "CLOCK_TWELVE", "type": "boolean", "optional": true, "default": false
   },

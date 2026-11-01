@@ -1408,6 +1408,8 @@ thinks the radio forgot everything. The loader-side wait (`plans/network-recover
 - HTTP sleep queries treat `sleep` as an optional wake-up duration and `after` as an independent delay before
   deep sleep (both minutes); an omitted or zero wake duration leaves the timer wake source disabled. The HTTP
   handler folds the two into one comma-encoded `sleep=sfor,after` command and skips the bare `after`.
+  `sleep=0&after=0` is accepted as immediate deep sleep without a timer wake.
+- The WebUI update page has a GET form for the same `sleep` and `after` parameters.
 - HTTP + WebSocket + upload/update + search/curated orchestration.
 - **`PLVALIDATE`** (a new `requestType_e`) carries the Playlist Validator's progress: start/count, one `{i, r}`
   per station, then done. See `src/core/playlistvalidator.cpp`.
@@ -3946,6 +3948,9 @@ thinks the radio forgot everything. The loader-side wait (`plans/network-recover
     reboot. Browser-side: sends `mdnsname=`, swaps the button row for a status message, then polls the new `.local` host
     with `redirectWhenReady` (8s timeout, 500ms post-ready grace). If mdnsValue is empty, saves silently without
     redirect.
+  - `MDNS_HOST` in root `myoptions.h` supplies the initial mDNS hostname (empty keeps the `ehradio-<chip id>` default).
+    The selected initial value is persisted in NVS on first initialization and used when System settings are reset;
+    later WebUI changes remain stored and take precedence on normal boots.
 - consolidated with `data/www/dragpl.js`
   - Playlist drag-and-drop reorder behavior.
 
@@ -5506,5 +5511,4 @@ by the shared HTTP/MQTT/Telnet non-WebUI policy.
 ---
 
 > Tracked issues and risk notes are in `.github/code-issues.md`.
-
 

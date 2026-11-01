@@ -2165,6 +2165,7 @@ function outputDefaultsSection() {
     if (!ctrl) return;
 
     var val = getControlValue(ctrl, item.type);
+    if (item.omit_if_empty && String(val).trim() === '') return;
     var formatted = formatValue(val, item.type, item.define);
     body += outputLine(item.define, formatted, item.comment || null);
   });

@@ -56,6 +56,74 @@
           <div class="flex-row group_ir last hidden">
             <div class="fb local" data-command="setupir" data-i18n="ttl_ir_recorder">IR Recorder</div>
           </div>
+<div class="inputwrap center">
+  <form id="sleepform" method="GET" action="/"
+    onsubmit="
+      event.preventDefault();
+
+      const status = document.getElementById('sleepstatus');
+
+      fetch(this.action + '?' + new URLSearchParams(new FormData(this)))
+	  .then(() => {
+	  status.textContent = '✓ Comanda Sleep a fost trimisă către dispozitiv';
+	  status.style.color = '#4caf50';
+	  
+	  setTimeout(() => {
+	  status.textContent = '';
+	  }, 3000);
+	  })
+	  .catch(() => {
+	  status.textContent ='Comanda a fost trimisă. Dispozitivul poate fi deja în sleep.';
+	  status.style.color = '#ff9800';
+	  
+	  setTimeout(() => {
+	  status.textContent = '';
+	  }, 3000);
+	  });
+	  ">
+
+    <div class="row rowinput">
+      <label for="sleepduration" data-i18n="lbl_sleep_duration">
+        Sleep (minutes)
+      </label>
+
+      <input id="sleepduration"
+             type="number"
+             name="sleep"
+             min="0"
+             max="65535"
+             step="1"
+             value="0"
+             required>
+
+      <label for="sleepafter" data-i18n="lbl_sleep_after">
+        After (minutes)
+      </label>
+
+      <input id="sleepafter"
+             type="number"
+             name="after"
+             min="0"
+             max="65535"
+             step="1"
+             value="0"
+             required>
+    </div>
+
+    <div class="row rowinput inputwrap center">
+      <input type="submit"
+             class="fb"
+             value="Sleep"
+             data-i18n="btn_sleep">
+    </div>
+
+    <div id="sleepstatus"
+         style="margin-top:10px;font-weight:bold;text-align:center;">
+    </div>
+
+  </form>
+</div>
+
         </section>
 
         <a name="screen"></a>
