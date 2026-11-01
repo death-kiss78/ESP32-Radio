@@ -43,7 +43,7 @@
 //  47   SDMMC_D3
 //  48   SDMMC_D2
 
-//#define ES3C28S                      // ESP32-S3 ES3C28P Dev Board (4.0)
+#define ES3C28S                      // ESP32-S3 ES3C28P Dev Board (4.0)
 
 
 /* --- Firmware File --- */
