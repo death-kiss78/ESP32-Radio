@@ -87,7 +87,6 @@
 #define SDMMC_D1 41
 #define SDMMC_D2 48
 #define SDMMC_D3 47
-#endif
 
 
 /* --- User Defaults --- */
