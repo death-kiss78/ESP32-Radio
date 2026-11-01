@@ -1,8 +1,8 @@
 site_name: ehRadio
 site_description: ESP32 Radio (yoRadio fork)
-site_url: https://trip5.github.io/ehRadio/
-repo_url: https://github.com/trip5/ehRadio
-repo_name: trip5/ehRadio
+site_url: https://death-kiss78.github.io/ESP32-Radio/
+repo_url: https://github.com/death-kiss78/ESP32-Radio
+repo_name: death-kiss78/ESP32-Radio
 
 theme:
   name: material
