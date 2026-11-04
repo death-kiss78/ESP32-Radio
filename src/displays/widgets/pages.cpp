@@ -47,7 +47,9 @@ void Pager::setPage(Page* page, bool black){
 //}
 
 Page::~Page() {
-  for (const auto& w : _widgets) removeWidget(w);
+  std::list<Widget*> draining;
+  draining.swap(_widgets);
+  for (const auto& w : draining) delete w;
   // what about deleting _pages ???
 }
 
@@ -57,6 +59,12 @@ void Page::loop() {
 
 Widget& Page::addWidget(Widget* widget) {
   _widgets.push_back(widget);
+  widget->setActive(_active, _active);
+  return *widget;
+}
+
+Widget& Page::addWidgetFirst(Widget* widget) {
+  _widgets.push_front(widget);
   widget->setActive(_active, _active);
   return *widget;
 }
