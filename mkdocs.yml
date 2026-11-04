@@ -1,8 +1,8 @@
-site_name: ehRadio
+site_name: ESP32-Radio
 site_description: ESP32 Radio (yoRadio fork)
-site_url: https://trip5.github.io/ehRadio/
-repo_url: https://github.com/trip5/ehRadio
-repo_name: trip5/ehRadio
+site_url: https://death-kiss78.github.io/ESP32-Radio/
+repo_url: https://github.com/death-kiss78/ESP32-Radio
+repo_name: death-kiss78/ESP32-Radio
 
 theme:
   name: material
@@ -35,13 +35,16 @@ theme:
 markdown_extensions:
   - pymdownx.magiclink:
       repo_url_shorthand: true
-      user: trip5
-      repo: ehRadio
+      user: death-kiss78
+      repo: ESP32-Radio
   - pymdownx.highlight:
       anchor_linenums: true
   - pymdownx.inlinehilite
   - pymdownx.snippets
   - pymdownx.superfences
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
   - admonition
   - pymdownx.details
   - pymdownx.tabbed:
@@ -55,11 +58,8 @@ markdown_extensions:
 nav:
   - Readme: index.md
   - Hardware: Hardware.md
-  - Audio/Power Isolation: Isolation.md
   - Controls: Controls.md
   - Commands: Commands.md
-  - Trip 5's Notebook: notebooks/notebook.md
-  - Old Readme: README.old.md
   - ёRadio Images: Images.md
 
 plugins:
@@ -68,4 +68,4 @@ plugins:
 extra:
   social:
     - icon: fontawesome/brands/github
-      link: https://github.com/trip5
+      link: https://github.com/death-kiss78
