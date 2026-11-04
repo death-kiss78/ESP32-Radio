@@ -10,7 +10,7 @@
 // Display: ILI9341 (SPI 320x240 TFT)
 // Audio Decoder: ES8311 (PCM I2S Mono Decoder)
 // SPI Bus A: ILI9341 (SPI 320x240 TFT)
-// SPI Bus B: SD Card Reader
+// SPI Bus B: SD card reader
 //
 //  Pin  Function
 //  ---  --------
@@ -39,7 +39,7 @@
 
 
 /* --- Firmware File & Board --- */
-#define FIRMWARE_NAME        "es3c28p" /* your ehRadio's name */
+#define FIRMWARE_NAME        "es3c28p" /* your ESP32-Radio's name */
 
 /* --- SPI Bus Pins --- */
 #define SPIA_SCK             12
@@ -82,7 +82,6 @@
 
 /* --- Peripherals and Build Options --- */
 #define RGB_LED_PIN          42
-#define MQTT_ENABLE
 #define SD_CS                47
 #define SD_SPI               'B'       /* assign SD to SPI bus */
 

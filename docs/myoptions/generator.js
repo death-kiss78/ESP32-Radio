@@ -1,5 +1,5 @@
 // @ts-nocheck
-/*  ehRadio myoptions Generator - generator.js
+/*  ESP32-Radio myoptions Generator - generator.js
  *  Reads JSON config files and builds a dynamic hardware configuration page.
  *  State is serialized via LZ-string into the URL hash for shareable links.
  * 
@@ -2165,6 +2165,7 @@ function outputDefaultsSection() {
     if (!ctrl) return;
 
     var val = getControlValue(ctrl, item.type);
+    if (item.omit_if_empty && String(val).trim() === '') return;
     var formatted = formatValue(val, item.type, item.define);
     body += outputLine(item.define, formatted, item.comment || null);
   });
@@ -2414,8 +2415,8 @@ function generatePlatformioIni() {
 
   // Get firmware name for the env
   var firmwareNameCtrl = document.querySelector('[data-define="FIRMWARE_NAME"]');
-  var firmwareName = firmwareNameCtrl ? firmwareNameCtrl.value : 'my_ehradio';
-  var envName = firmwareName.toLowerCase().replace(/[^a-z0-9_]/g, '_').replace(/^_+|_+$/g, '') || 'my_ehradio';
+  var firmwareName = firmwareNameCtrl ? firmwareNameCtrl.value : 'my_esp32radio';
+  var envName = firmwareName.toLowerCase().replace(/[^a-z0-9_]/g, '_').replace(/^_+|_+$/g, '') || 'my_esp32radio';
 
   // Compute shareable URL to embed in the platformio.ini header comment
   var pioState = serializeState();
@@ -2447,7 +2448,7 @@ function buildBoardSection_pio(bd) {
   out += '; Board: ' + bd.name + '\n';
   out += '; -----------------------------------------------------------------------\n';
   out += '[' + bd.env + ']\n';
-  out += 'extends = ehradio\n';
+  out += 'extends = esp32radio\n';
   out += 'board = ' + bd.board + '\n';
 
   // board_build.*, board_upload.*, and any other generic platformio.ini fields
@@ -2460,7 +2461,7 @@ function buildBoardSection_pio(bd) {
   // build_flags
   if (bd.build_flags) {
     out += 'build_flags =\n';
-    out += '  ${ehradio.build_flags}\n';
+    out += '  ${esp32radio.build_flags}\n';
     out += '  ' + bd.build_flags + '\n';
   }
 
@@ -2551,7 +2552,7 @@ function buildEnvSection_pio(bd, envName, firmwareName) {
 
   // lib_deps
   out += 'lib_deps =\n';
-  out += '  ${ehradio.lib_deps}\n';
+  out += '  ${esp32radio.lib_deps}\n';
   if (libDepsStr) {
     libDepsStr.split('\n').forEach(function(l) {
       if (l.trim()) out += '  ' + l.trim() + '\n';
@@ -2560,7 +2561,7 @@ function buildEnvSection_pio(bd, envName, firmwareName) {
 
   // build_src_filter
   out += 'build_src_filter =\n';
-  out += '  ${ehradio.build_src_filter}\n';
+  out += '  ${esp32radio.build_src_filter}\n';
   if (buildFilterStr) {
     buildFilterStr.split('\n').forEach(function(l) {
       if (l.trim()) out += '  ' + l.trim() + '\n';
@@ -2610,13 +2611,16 @@ function getFile(type) {
     var content2 = generatePlatformioIni();
     downloadFile('platformio.ini', content2);
   }
+  window.location.href = buildShareUrl();
 }
 
 function copyFile(type) {
   var content = type === 'options' ? generateOptionsH() : generatePlatformioIni();
   navigator.clipboard.writeText(content).then(function() {
+    window.location.href = buildShareUrl();
     showAlert('info', type === 'options' ? 'myoptions.h copied to clipboard!' : 'platformio.ini copied to clipboard!', 2500);
   }, function() {
+    window.location.href = buildShareUrl();
     showAlert('error', 'Could not copy to clipboard.', 3000);
   });
 }
@@ -2634,10 +2638,14 @@ function downloadFile(filename, text) {
 // ============================================================
 // Copy link (state -> LZ-string -> URL hash)
 // ============================================================
-function copyLink() {
+function buildShareUrl() {
   var state = serializeState();
   var compressed = LZString.compressToBase64(JSON.stringify(state));
-  var url = window.location.href.split('#')[0] + '#' + encodeURIComponent(compressed);
+  return window.location.href.split('#')[0] + '#' + encodeURIComponent(compressed);
+}
+
+function copyLink() {
+  var url = buildShareUrl();
 
   if (window.location.protocol !== 'http:' && window.location.protocol !== 'https:') {
     window.location.href = url;
