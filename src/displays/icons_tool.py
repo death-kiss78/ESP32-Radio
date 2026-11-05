@@ -109,8 +109,8 @@ SLOT_NOTES = {
     0: ' (unused, should probably stay unused)',
     9: ' (DO NOT USE: TAB control char conflicts with TFT print())',
     10: ' (DO NOT USE: LF control char conflicts with TFT print())',
-    30: ' (DO NOT USE: 0x1E is the spacer character in TextWidget: it gets'
-        ' consumed as a 2px gap before reaching the icon renderer)',
+    30: " (free: the footer's 2px text spacer was retired, so no codepoint is"
+        " spent on a gap any more)",
 }
 
 DECL_RE = re.compile(r'^\s*static\s+const\s+(uint8_t|uint16_t|uint32_t)\s*'
@@ -147,12 +147,40 @@ def read_lines(path=ICONS_H):
     with open(path, 'r', encoding='utf-8', newline='') as f:
         text = f.read()
     EOL = '\r\n' if '\r\n' in text else '\n'
-    return text.split(EOL)
+    lines = text.split(EOL)
+    # A trailing newline leaves an empty last element.  Keeping it made every write add
+    # one more, so the file grew a blank line per run; one newline is put back on write.
+    while lines and lines[-1] == '':
+        lines.pop()
+    return lines
+
+
+def separate_arrays(lines):
+    """One blank line between an array's closing `};` and whatever follows it.
+
+    Applied on every write rather than only on insertion, so a seeded array and a
+    hand-pasted one end up laid out the same, and a file that lost a blank line
+    somewhere gets it back.  Blanks are only ever ADDED: the runs of two above the
+    header block are the author's, and the generated tables already carry their own.
+    """
+    out = []
+    for i, line in enumerate(lines):
+        out.append(line)
+        if line.strip() != '};' or i + 1 >= len(lines):
+            continue
+        nxt = lines[i + 1].strip()
+        # Only a real neighbour: a `//` line or the next declaration.  A `};` inside a
+        # commented-out block is followed by `*/`, and a blank there would sit inside the
+        # comment; the generated block's last `};` is followed by the END marker.
+        if (nxt.startswith('//') or nxt.startswith('static')) \
+                and not nxt.startswith(END_MARK):
+            out.append('')
+    return out
 
 
 def write_lines(lines, path=ICONS_H):
     with open(path, 'w', encoding='utf-8', newline='') as f:
-        f.write(EOL.join(lines) + EOL)
+        f.write(EOL.join(separate_arrays(lines)) + EOL)
 
 
 # ---------------------------------------------------------------------------
@@ -389,6 +417,22 @@ def check(lines, icons):
     carries `fault`, so it can be asked about and settled."""
     by_name, scales = model(icons)
     problems = []
+    # A name declared twice cannot compile, and nothing downstream can see it: model()
+    # is keyed on the name, so the LAST declaration silently wins and every later edit
+    # addresses the wrong copy.
+    declared = {}
+    for icon in icons:
+        if TABLE_RE.match(icon.name):
+            continue
+        if icon.name in declared:
+            problems.append(note(icon.where(), f'{icon.name} is declared a second time'
+                                                f' here; the first is at'
+                                                f' {ICONS_H.name}:{declared[icon.name]}.'
+                                                f' Only one may exist, and every other'
+                                                f' check and edit addresses the last',
+                                 icon.name))
+        else:
+            declared[icon.name] = icon.where()
     for icon in by_name.values():
         cols, want_rows = icon.bits, icon.rows_wanted
         if icon.scale > 1 and icon.base not in by_name:
@@ -418,10 +462,18 @@ def check(lines, icons):
             if have != pixels(row.value, cols):
                 problems.append(Problem(row.lineno + 1, owner=icon.name, icon=icon,
                                         decl=icon.where()))
-        if icon.codepoint is None:
+        # Only the scale-1 master needs the hand-written `\DDD` comment; a variant takes
+        # its codepoint from that master.  A variant that carries one anyway must agree.
+        if icon.scale == 1 and icon.codepoint is None:
             problems.append(note(icon.where(), f'{icon.name} has no codepoint comment above'
                                                 f' it, so it cannot be placed in a table',
                                  icon.name))
+        elif (icon.scale > 1 and icon.codepoint is not None and icon.base in by_name
+              and icon.codepoint != by_name[icon.base].codepoint):
+            problems.append(note(icon.where(),
+                                 f'{icon.name} sits under a \\{icon.codepoint:03o} comment'
+                                 f' but {icon.base} is'
+                                 f' \\{by_name[icon.base].codepoint:03o}', icon.name))
     seen = {}
     for base in sorted(scales, key=lambda b: by_name[b].decl_line):
         cp = by_name[base].codepoint
@@ -572,25 +624,40 @@ def mode_seed(lines, icons, base, target, force):
         fail(f'scale {target} is not a variant scale: the tool seeds 2..{MAX_SCALE},'
              f' because 6*N has to fit the uint32_t row')
     new_name = f'{base}_{target}'
-    if new_name in by_name and not force:
+    existing = by_name.get(new_name)
+    if existing is not None and not force:
         fail(f'{new_name} already exists; --force overwrites it')
     source = max((s for s in scales[base] if s < target and target % s == 0), default=1)
     src = by_name[base] if source == 1 else by_name[f'{base}_{source}']
+    # A seed copies the BINARY.  If the source's comments disagree, the drawing is
+    # probably in them and the result will look nothing like it - say so before writing.
+    off = sum(1 for r in src.rows
+              if (r.comment or '').strip() != pixels(r.value, src.bits))
+    if off:
+        print(f'{ICONS_H.name}:{src.where()}: {src.name} has {off} row(s) whose comment'
+              f' disagrees with its binary, and a seed copies the BINARY - run'
+              f' `-b {src.name}` first if the comments are the drawing')
     rows = expand(src, target)
     icon = Icon(new_name, 'uint32_t', 0, rows, [])
-    comment = [f'// \\{by_name[base].codepoint:03o}  {base}  scale {target}'
-               f' ({target * BASE_COLS}x{target * BASE_ROWS}, seeded by icons_tool.py,'
-               f' hand-tunable)']
-    highest = max(scales[base])
-    anchor = by_name[base] if highest == 1 else by_name[f'{base}_{highest}']
-    block = [''] + comment + render_array(icon, rows, 'uint32_t')
-    lines = lines[:anchor.end_line + 1] + block + lines[anchor.end_line + 1:]
+    if existing is not None:
+        # --force REPLACES this array.  Appending a second block of the same name left
+        # two declarations and stopped the header compiling, so inserting is for a new
+        # name only.
+        lines = apply_block(lines, existing, render_array(icon, rows, 'uint32_t'))
+    else:
+        # No comment above a variant: the scale-1 master carries the hand-written one,
+        # and a variant inherits its codepoint from that master.
+        highest = max(scales[base])
+        anchor = by_name[base] if highest == 1 else by_name[f'{base}_{highest}']
+        block = [''] + render_array(icon, rows, 'uint32_t')
+        lines = lines[:anchor.end_line + 1] + block + lines[anchor.end_line + 1:]
     lines = write_tables(lines, parse(lines))
     write_lines(lines)
     fresh = parse(read_lines())
     placed = next((i for i in fresh if i.name == new_name), None)
     where = f'{ICONS_H.name}:{placed.decl_line + 1}' if placed else ICONS_H.name
-    print(f'{where}: {new_name} seeded from {src.name} x{target // source}'
+    verb = 'replaced' if existing is not None else 'seeded'
+    print(f'{where}: {new_name} {verb} from {src.name} x{target // source}'
           f' ({src.bits}x{src.rows_wanted} -> {target * BASE_COLS}x{target * BASE_ROWS})')
 
 
@@ -701,24 +768,55 @@ def mode_list(icons):
     print(f'\n{len(scales)} marks, {len(only_one)} at scale 1 only')
 
 
-def mode_stats(icons):
+def kb(n):
+    return f'{n / 1024:.1f} KB'
+
+
+def mode_stats(lines, icons):
+    """What icons.h costs the image, as far as that can be known from here.
+
+    The data side is exact: every array is 8*N rows of one row type, and every table
+    is SLOTS pointers.  Two things are not derivable from this file and are said out
+    loud instead of guessed: the COPY COUNT (each TU that emits _writeGlyph() keeps
+    its own - measured as 2 on a PSFBUFFER TFT build and 3 on an OLED one) and the
+    cost of the loop itself, which is code rather than data.
+    """
     by_name, scales = model(icons)
     size = {'uint8_t': 1, 'uint16_t': 2, 'uint32_t': 4}
-    per_scale, total = {}, 0
+    referenced = {entry for entries in table_slots(lines, icons).values()
+                  for entry, _ in entries if entry}
+    per_scale, in_image, orphaned = {}, 0, 0
     for base, scale_set in scales.items():
         for s in scale_set:
             icon = by_name[base] if s == 1 else by_name[f'{base}_{s}']
             n = icon.rows_wanted * size[icon.ctype]
-            per_scale[s] = per_scale.get(s, 0) + n
-            total += n
+            slot = per_scale.setdefault(s, [0, 0])
+            slot[0] += n
+            slot[1] += 1
+            if icon.name in referenced:
+                in_image += n
+            else:
+                orphaned += n
+    print('pixels, per scale:')
     for s in sorted(per_scale):
-        count = sum(1 for b in scales if s in scales[b])
-        print(f'scale {s}: {per_scale[s]:5d} B of pixels over {count} mark(s)')
+        n, count = per_scale[s]
+        print(f'  scale {s}: {n:5d} B ({kb(n)}) over {count:2d} mark(s),'
+              f' {BASE_ROWS * s} rows of {BASE_COLS * s} bits')
     tables = MAX_SCALE * SLOTS * PTR_BYTES
-    print(f'tables: {tables} B ({MAX_SCALE} x {SLOTS} pointers, one set per TU that'
-          f' emits _writeGlyph)')
-    print(f'total:  {total + tables} B; the pixel comments are stripped before the'
-          f' compiler sees them and cost no flash')
+    data = in_image + tables
+    print(f'  tables:  {tables:5d} B ({kb(tables)}), {MAX_SCALE} tables of {SLOTS}'
+          f' pointers')
+    print(f'in the image: {data} B ({kb(data)}): the arrays its tables name, plus'
+          f' the tables')
+    if orphaned:
+        print(f'not in the image: {orphaned} B declared but named by no table -'
+              f' static and unreferenced, so the linker drops it')
+    print(f'with copies: {kb(data * 2)} on a PSFBUFFER TFT build, {kb(data * 3)} on'
+          f' an OLED build')
+    print('  measured, not derived: each TU that emits _writeGlyph() keeps its own'
+          ' copy of every array.')
+    print('not counted: the _writeGlyph() loop itself, which is code; and the pixel'
+          ' comments, which the preprocessor strips first.')
 
 
 def mode_check(lines, icons):
@@ -865,7 +963,7 @@ def main():
         if args.list:
             mode_list(icons)
         if args.stats:
-            mode_stats(icons)
+            mode_stats(lines, icons)
         return 0
     if args.extend:
         mode_seed(lines, icons, args.extend[0], int(args.extend[1]), args.force)

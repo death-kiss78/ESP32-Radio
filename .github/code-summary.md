@@ -1072,6 +1072,22 @@ thinks the radio forgot everything. The loader-side wait (`plans/network-recover
   - `mute()`: volume-0 toggle backed by the private `_muteVol` member; uses raw `getVolume()`/`setVolume()` so
     `config.store.volume` and the displayed volume are deliberately untouched. Shared by the physical mute buttons, the
     `mute` command, and the IR mute button — the `DSP_DUMMY` suppression lives only at the physical-button call site.
+    It **refuses to turn mute on while `config.store.volume` is 0** (already silent, and the way back would restore 0):
+    that one early return is the whole guard, because every caller comes through here. Unmuting is never refused.
+  - `isMuted()` is the only reader of `_muted`, and the WebUI mirrors it: `NetServer::loop()` compares the value
+    against `_muteSeen` and queues a `MUTESTATE` message on each transition, so the writers above (`PR_VOL`, a manual
+    `PR_PLAY`, `PR_STOP`, two error paths, `clearMute()` on a mode change) need no broadcast of their own.
+  - The volume line is laid out with **spaces**, not a control character: the number sits centred in a **three-cell
+    field** - `" 5 "`, `" 42"`, `"100"`, with an odd spare cell going to the left - so the speaker keeps a fixed x at
+    1, 2 or 3 digits and no digit count can shift the line. `voltxtFmt` supplies any suffix (`"%d%%"`), whose cells
+    are added on top of the three; `""` means no number at all. The old 2px `0x1E` spacer is gone from `display.cpp`,
+    `TextWidget::_draw()`, `TextWidget::setText()` and `DSP_PIXEL_SPACER`, so `icons.h` slot 30 is a free icon again.
+  - The panel's footer glyph follows the same state: `Display::_updateVolume()` draws `\037` when `player.isMuted()`
+    even though the stored volume is still above 0, and `mute()` queues `DRAWVOL` because nothing else repaints that
+    line. A mute that **ends** goes through the private `_clearMute()`, which clears the flag and queues `DRAWVOL` -
+    the station change, the stop, the volume change, `playUrl()` and both connect failures call it, and `clearMute()`
+    (a mode change) is exactly that call. `PR_PLAY` / `PR_STOP` do **not** repaint the volume line by themselves: the
+    first device test left the X on the panel after a station change had already unmuted the audio and the WebUI.
   - `prev()` / `next()` / `toggle()` delegate retry cancellation to `network.cancelStreamRetry()` (previously duplicated
     inline).
   - **Shuffle used to be a uniform draw *with replacement*, and three defects followed from that shape.** `next()` called
@@ -1224,6 +1240,12 @@ thinks the radio forgot everything. The loader-side wait (`plans/network-recover
   same predicate against `t1` would close it. See `plans/screensaver-panel-ownership.md`,
   `plans/screensaver-line-scroll.md`, `plans/screensaver-line-centre.md`,
   `plans/screensaver-line-duplicate-name.md` and `plans/screensaver-line-weather-and-clock-snap.md`.
+- **The line's buffer is `COMPOSED_LINE_BUFF`** (`WEATHER_STRING_L + 2`, 514 bytes), passed to `_sstext` twice -
+  at construction and again in the `init()` of the else branch, because `init()` re-mallocs both string buffers at
+  the size it is given. The weather row takes the same size, for the same reason and in the same two places plus its
+  own `_layoutChange()` re-init. This is what lets the composed line (name + title, or the forecast) arrive whole:
+  the default widget buffer is `WIDGET_BUFF_SIZE` (172) and everything used to be 140, i.e. 138 bytes in a
+  `ScrollWidget`, which silently cut both. See `plans/widget-text-buffer-sizes.md`.
 - **A track change blanks the info line for one second** (`SS_LINE_HOLD_MS`, 1000 ms).  The trigger is the
   `SSHOLD` request, queued at the TOP of `Player::_play()` - after its guards, before `setDefaults()`,
   `loadStation()` and the title write - and handled in `Display::loop()` under `if (config.isScreensaver)`.  It has
@@ -1446,6 +1468,12 @@ thinks the radio forgot everything. The loader-side wait (`plans/network-recover
 - HTTP + WebSocket + upload/update + search/curated orchestration.
 - **`PLVALIDATE`** (a new `requestType_e`) carries the Playlist Validator's progress: start/count, one `{i, r}`
   per station, then done. See `src/core/playlistvalidator.cpp`.
+- **`MUTESTATE`** (a new `requestType_e`; not named `MUTE`, which `icons.h` already owns) carries
+  `{"payload":[{"id":"mutebutton","value":0|1}]}` read from
+  `player.isMuted()`. It is queued when `NetServer::loop()` sees the state differ from `_muteSeen` — one place that
+  covers every writer of `Player::_muted` — and sent to a client as it connects. It is also answered on demand by the
+  `getmute` command, which the player page sends after `player.html` is injected because the connect-time message
+  arrives before the markup that it paints exists.
 - **The theme editor's API sits at the end of `handleNotFound()`, behind `#if defined(DSP_TFT) || DBGWUI`.**
   Eight routes serve `/editor.html` and nothing else links to them: `GET /theme-elements.json` (one object per
   element — its key and its label — in table order), `GET /themeall.json` (every id, empty slots included, because the editor's source
@@ -4020,6 +4048,14 @@ thinks the radio forgot everything. The loader-side wait (`plans/network-recover
   its neighbours at every breakpoint and inherits the `.active` states from that family instead of carrying rules of its
   own. The `playermode` branch in `script.js` is still what shows it in the SD player only, so the info row is left with
   volume, codec, battery and the bars.
+- `#mutebutton` is a 38x25 pill to the LEFT of the volume slider in `#volrow`: the slider's height, its 13px radius,
+  and the round controls' palette (`--icons-outline` at rest; `--highlight-fill` background with
+  `--icon-active-glyph` while muted, hover under the mouse-only query only), so a lit pill reads like a lit `.gb`.
+  The glyph carries a cropped `viewBox` (`1.6 3.6 20.5 17.0` — the artwork's own bounds plus about 0.4 units of
+  air, not a stretched drawing) sized 24x20, which is why its lines sit roughly a pixel off the border instead of
+  floating inside a 24x24 box. It is a `cmdbutton` with `data-command="mute"`, so the click path needs no JS and no
+  local toggle — `setupElement` mirrors the device's state onto `.active`. It is deliberately not a `.gb`, so the
+  breakpoint circle sizes do not apply, and the EQ overlay covers it exactly as it covers the slider.
 
 ## `data/www/settings.html`
 - Settings page structure with grouped sections and `data-command` bindings.
@@ -4296,6 +4332,18 @@ thinks the radio forgot everything. The loader-side wait (`plans/network-recover
     its window can do it. Fixed in `~ScrollWidget()`, which releases the slot when it owns it, plus an explicit
     `dsp.setScrollId(NULL)` at each of the three page swaps so the idiom stays visible where `_showDialog()` and
     `_switchMode()` already spell it. See `plans/boot-scroll-id-dangle.md`.
+  - **The slot is handed out by the page in round-robin, not claimed by whichever line is due first.** `Page::loop()`
+    polls every widget with `scrollWanted()` - side-effect free, so it does not refresh the stamp it tests - while the
+    slot is free, takes the first one **after the widget served last**, and calls its `scrollTurn()`, which makes one
+    step and takes the slot. The owner then keeps stepping in its own `loop()`, which claims nothing: `loop()` is now
+    "step if I own it", and only the page hands the slot out. Consequences: no line can take two turns in a row while
+    another wants one; the page's widget ORDER no longer decides who scrolls (a title 2 appended late in the layout
+    path used to sit after the weather row and was therefore never reached first); and a conf's `startscrolldelay`
+    of 0 - which every `weatherConf` in the tree writes, against `SCROLLDELAY` for every other line - no longer means
+    "always". `_scrollReady()` folds the gates (`_present`, `_active`, `!_locked`, `_doscroll`, textsize) so the poll
+    and the step cannot disagree; `_active` is in it because `_calcX()` claims the slot whether or not anything is
+    drawn, so an inactive-but-unlocked line used to be able to own the slot invisibly. This is the "the weather line
+    scrolls constantly and title 2 never gets a turn" report. See `plans/scroll-turn-fairness.md`.
   - `ProgressWidget` is the boot screen's animated dots line, with exactly one instantiation (`Display::_bootScreen()`),
     so its behaviour is the boot screen's. The line is `speaker + runway + boot glyph`, hard against both glyphs, and
     `ProgressConfig` is `{ frame interval ms, line character width, blob elements }` — every conf carries that header
@@ -4754,10 +4802,13 @@ must test — never a coordinate, since `{0,0}` is a legitimate position:
 | `VUBandsConfig` | `width`, `height`, `space`, `vspace`, `perheight` | any cell non-zero |
 
 `ScrollConfig` used to carry `buffsize` and `uppercase`, and its guard used to be `buffsize > 0`; both members are
-gone. The buffer is `WIDGET_BUFF_SIZE` in `options.h` (every conf passed the same 140, and the widget's own
-`init()` default is that macro, with the boot line passing `BOOTSTR_LEN` instead), and `uppercase` never did
-anything at all - `PRETEXT_ALLCAPS` is the switch that works. `conf_tool.py` strips the old pair out of a conf
-file (`trim_scroll_conf()`).
+gone. The buffer is `WIDGET_BUFF_SIZE` in `widgets.h` (every conf passed the same 140; the widget's own `init()`
+default is that macro, now **172** = `STATION_FIELD_LENGTH` + 2, which is what a 169-byte station name or title needs
+because a `ScrollWidget` keeps `_buffsize - 2` bytes), with the boot line passing `BOOTSTR_LEN` instead and the
+weather row and the screensaver's info line passing `COMPOSED_LINE_BUFF` (`WEATHER_STRING_L` + 2) for the 511-byte
+forecast. A widget's size is repeated at every `init()`, not just at construction: `init()` re-mallocs.
+`uppercase` never did anything at all - `PRETEXT_ALLCAPS` is the switch that works. `conf_tool.py` strips the old
+pair out of a conf file (`trim_scroll_conf()`). See `plans/widget-text-buffer-sizes.md`.
 
 **The guard is one rule, in one place.** `presentOf()` in `widgetsconfig.h` - every cell zero means absent -
 replaced five per-type `present()` overloads and the `zeroed()` patch the clock and the digits needed while the
@@ -4850,8 +4901,9 @@ full blit every frame, so the box *area* is the frame cost - on the 480x360 the 
 [`plans/screensaver-vu-bars-allowance.md`](../plans/screensaver-vu-bars-allowance.md).
 
 **The screensaver's segment GAP and COUNT are its own, and they are PER STYLE** - decided in `initScreensaver()` on the
-copy of `bandsConf` it already makes, and drawn by `_drawBarsTiled()` behind the per-instance `_ssTiling` flag, so the
-player page's `_drawBars()` loop is the historical one, verbatim. The two bar painters read differently, so
+copy of `bandsConf` it already makes; the shared `_drawBars()` loop then draws them unchanged, which is what keeps the
+player page historical and verbatim (the exact-tiling painter and its `_ssTiling` flag were removed). The two bar
+painters read differently, so
 `VU_STYLE_BARS` gets `max(layoutBands.vspace, 1 x vuPeakThickness(box.w))` - gap equal to the marker, which then FILLS
 a gap - and a **square-or-taller** block (`thk >= w`), while `VU_STYLE_DIGITAL_LED` gets `2 x` (air either side of the
 snapped marker) and **1:1.5-or-taller** (`2*thk >= 3*w`). `vuPeakThickness()` is `ceil(len *
@@ -4861,15 +4913,17 @@ at the **hard cap of 16**, which a layout asking for more is clamped down to. On
 so a poor candidate can never be chosen (12 into 460 is 40 long against 25 tall for Bars and is stepped over to 16);
 and because the walk only ever makes blocks SHORTER, a panel whose layout already yields tall enough blocks keeps its
 count - the 320x240 stays at 10 for both styles. On the 480x360 with the 0.75 allowance: Bars = 16 blocks of ~22x25
-with 6 px gaps, Digital LED = 16 of ~16x25 with 12 px gaps. See `plans/screensaver-vu-two-bar-styles.md`. Because the
-chosen count rarely divides the span, the
-tiling is exact: the `per - 2` min segments are uniform at `len/per` or `len/per + 1` - whichever needs the **smaller**
-correction at the tip, ties to the thinner tip - and the two tip segments take the rest, the outer one on the floor, so
-the remainder never becomes background at the loud end. The last segment is drawn with no trailing gap, which puts its
-ink on the border column (and, with peaks on, under the marker). The direction choice is what keeps this sane at an
-exact division, where the "+1" direction would shave `per - 2` off the tip pair. The snap helpers still use one `step`
-(the min pitch): a pitch varying by 1 can put a block edge a pixel off a snapped boundary, which is invisible. See
-[`plans/screensaver-vu-segments.md`](../plans/screensaver-vu-segments.md).
+with 6 px gaps, Digital LED = 16 of ~16x25 with 12 px gaps. See `plans/screensaver-vu-two-bar-styles.md`.
+**Because the count rarely divides the span, the AXIS is snapped down to an exact multiple of it:** `axis = per *
+(box.w / per)` becomes `bands.height` and the box's left edge moves by `(box.w - axis) / 2`, so `step` is exactly the
+pitch `ssSegmentCount()` judged, every block is `len/per - gap` long, and `_drawBars()`'s trailing clamp cannot fire
+there. The pixels given up are fewer than `per` and come back as equal background at both ends of a box that is still
+centred - the 128x64 OLED shows 12 identical blocks of ~8x10 (Bars, 3 px each end) or ~6x10 (Digital LED). This
+replaced an exact tiling that shortened the two tip segments and drew the last one without its trailing gap; on a 5-9 px
+block those differences *are* the picture, which is why the OLED looked wrong. Snapping the axis also keeps
+`vuSnapLit()`'s LED grid and the peak markers on the gaps - a `lead` offset inside the painter would have cut the tip
+block instead - and it leaves the shared painter untouched. See
+[`plans/screensaver-vu-equal-segments.md`](../plans/screensaver-vu-equal-segments.md).
 
 **What the meter draws is `dimension * vuLeft / vuThreshold`** - the live reading as a fraction of the meter's
 REFERENCE - and `get_VUlevel()` returns the length CLEARED from each bar, 8 bits a channel, so **0 means "nothing
@@ -5405,6 +5459,8 @@ libraries embedded directly in the repository, mostly inherited from yoRadio and
   mod). PSRAM is required. `stopSong()` SM_CANCEL sequence now guarded by `if(m_f_running)` — prevents permanently stuck
   CANCEL bit when stop is called during init with no song playing.
   `VS_PATCH_ENABLE` forced `false` on this hardware — FLAC patches produce audio silence on this VS1053 variant.
+  **The chip performs no Parametric Stereo, so HE-AAC v2 (`mp4a.40.29`) plays as mono** — see the codec-order
+  subsection below before touching its variant table.
 - `ES8311_Audio/` — ES8311 codec driver (written for ehRadio by kasperaitis)
 
 ### I2S AAC decode: the facts that decide whether a stream keeps up (2026-11-03)
@@ -5441,6 +5497,24 @@ libraries embedded directly in the repository, mostly inherited from yoRadio and
   boundary. `frames/s` is only meaningful against the clock printed on the same line. `sil` counts runs of 480
   consecutive all-zero frames, i.e. 20 ms at 24 kHz.
 - **Global `-O2` buys nothing here**: decode time was unchanged and flash grew ~180 KB.
+
+### VS1053: HE-AAC v2 is mono, because the chip has no Parametric Stereo (2026-11-04)
+
+- **The failure is a lost channel, not a preference.** HE-AAC v2's AAC core is mono by construction; the stereo image
+  is synthesised by Parametric Stereo. The I2S path runs PS (`PS_DEC`) and plays those streams in stereo. The VS1053
+  decodes in hardware, does not do PS, and therefore outputs the mono core. Confirmed on hardware by forcing the
+  HE-AAC v1 variant: stereo returned immediately.
+- **`mp4a.40.29` is ranked last in `VS1053_Audio/`'s codec table** and LC and v1 sit above it. Never re-order that
+  table for bandwidth or quality reasons without testing the chip; on this backend the order decides whether a stream
+  has two channels at all.
+- **Both forks' tables were unable to decide the profile until 2026-11-04.** The match was `indexOf()`, and
+  `mp4a.40.2` is a literal prefix of `mp4a.40.29`, so every v2 line scored as AAC LC and ties went to whichever
+  variant the manifest listed first. Both now reject a match followed by a digit. The I2S ordering stated on
+  2026-11-03 was inert for v2 lines until this was fixed.
+- **The two tables differ in one position on purpose**: xHE is last on I2S (least likely supported), v2 is last on
+  VS1053 (loses a channel).
+- A `variant:` line naming the chosen `EXT-X-STREAM-INF` is printed once per master-playlist redirect; it is the only
+  record of which profile reached the decoder.
 
 ### Touchscreen library
 - `FT6336_Touchscreen/` — FT6336 capacitive touch driver (written for ehRadio by kasperaitis)
