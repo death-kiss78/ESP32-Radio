@@ -9,7 +9,8 @@
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
   <meta http-equiv="Pragma" content="no-cache">
   <meta http-equiv="Expires" content="0">
-  <title>ehRadio - myoptions Generator</title>
+    <link rel="icon" type="image/png" href="./images/icon.png">
+  <title>ESP32-Radio - myoptions Generator</title>
   <style>
     html, body { margin: 0; padding: 0; }
     body {
@@ -557,6 +558,57 @@
       white-space: pre;
       line-height: 1.4;
     }
+
+    /* top/bottom buttons */
+    #topbtn, .scrollbutton {
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      top: 0;
+      z-index: 99;
+      font-size: 24px;
+      font-weight: bold;
+      border: none;
+      outline: none;
+      background-color: transparent;
+      color: #555;
+      cursor: pointer;
+      padding: 20px;
+    }
+    #topbtn:hover, .scrollbutton:hover {
+      background-color: rgba(50,50,50,0.1);
+      color: #e3d25f;
+    }
+    #bottombtn {
+      left: auto;
+      right: 0;
+    }
+    .button {
+      padding: 8px 22px;
+      font-size: 18px;
+      border: #e3d25f 2px solid;
+      font-weight: normal;
+      box-sizing: border-box;
+      border-radius: 20px;
+      cursor: pointer;
+      text-align: center;
+      min-width: 140px;
+      margin-left: 0px;
+      text-transform: uppercase;
+      color: #e3d25f;
+      background: #272727;
+    }
+    .button:hover {
+      background: #e3d25f;
+      color: #000;
+      text-decoration: none;
+    }
+    .button:active {
+      position: relative;
+      top: 2px;
+    }
+
+
   </style>
 </head>
 <body>
@@ -579,7 +631,7 @@
 <div id="alert-bar" class="hidden"></div>
 
 <div id="content">
-  <h1>ehRadio - myoptions Generator</h1>
+  <h1>ESP32-Radio - myoptions Generator</h1>
   <div id="topinfo">Any button updates the URL with your current configuration; reload to undo changes made</div>
 
   <!-- All sections rendered here by JS -->
@@ -587,11 +639,13 @@
 
   <!-- Buttons -->
   <div class="buttons-row" id="buttons-area2" style="display:none">
-    <button class="gen-btn" onclick="getFile('options')">Get myoptions.h</button>
-    <button class="gen-btn" onclick="getFile('platformio')">Get platformio.ini</button>
-    <button class="gen-btn" onclick="copyFile('options')">Copy myoptions.h</button>
-    <button class="gen-btn" onclick="copyFile('platformio')">Copy platformio.ini</button>
-    <button class="gen-btn" onclick="copyLink()">Copy Link</button>
+
+    <div class="button apply" title="Download myoptions.h" onclick="getFile('options')">Get myoptions.h</div>
+    <div class="button apply" title="Download platformio.ini" onclick="getFile('platformio')">Get platformio.ini</div>
+    <div class="button apply" title="Copy myoptions.h to clipboard" onclick="copyFile('options')">Copy myoptions.h</div>
+    <div class="button apply" title="Copy platformio.ini to clipboard" onclick="copyFile('platformio')">Copy platformio.ini</div>
+    <div class="button apply" title="Copy generated link to clipboard" onclick="copyLink()">Copy Link</div>
+    <div class="button apply" title="Reset to defaults" onclick="window.scrollTo(0, 0); window.location.href = window.location.href.split('?')[0];">Reset</div>
   </div>
 
   <!-- Pin Configuration Preview -->
@@ -602,5 +656,30 @@
 </div>
 
 <script src="generator.js"></script>
+
+    <button onclick="topFunction()" id="topbtn" class="scrollbutton">&#8593;</button>
+    <button onclick="bottomFunction()" id="bottombtn" class="scrollbutton">&#8595;</button>
+
+<script>
+
+  function topFunction(){
+    window.scrollTo({
+      top: 0,
+      left: 0,
+      behavior: 'smooth'
+    });
+  }
+
+  function bottomFunction(){
+    window.scrollTo({
+      top: document.body.scrollHeight,
+      left: 0,
+      behavior: 'smooth'
+    });
+  }
+
+
+</script>
+
 </body>
 </html>

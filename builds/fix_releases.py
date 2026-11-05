@@ -284,7 +284,6 @@ def generate_esp_web_tools_manifests(firmwares, output_dir, version=''):
         manifest = {
             'name': f'ehRadio - {friendly_name}',
             'version': version,
-            'funding_url': 'https://github.com/sponsors/trip5',
             'builds': [
                 {
                     'chipFamily': chip_family,

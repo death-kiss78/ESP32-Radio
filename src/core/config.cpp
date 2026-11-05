@@ -50,6 +50,14 @@ bool wasUpdated(ESPFileUpdater::UpdateStatus status) { return status == ESPFileU
 
 namespace {
 
+void defaultMdnsName(char* name, size_t size, uint32_t chipId) {  //my line
+#ifdef MDNS_HOST  //my line
+  if (MDNS_HOST[0] != '\0') strlcpy(name, MDNS_HOST, size);  //my line
+  else  //my line
+#endif  //my line
+    snprintf(name, size, "esp32radio-%x", chipId);  //my line
+}  //my line
+
 bool isHttpUrl(const char* url) {
   return url != nullptr && (strncmp(url, "http://", 7) == 0 || strncmp(url, "https://", 8) == 0);
 }
@@ -116,10 +124,12 @@ void Config::loadPreferences() {
   CONFIGTIMELOG("prefs.begin & sentinel");
   // Load all fields in keyMap
   size_t keyCount = 0;
+  bool missingMdnsName = false;  //my line
   for (size_t i = 0; keyMap[i].key != nullptr; ++i) {
     uint8_t* field = (uint8_t*)&store + keyMap[i].fieldOffset;
     size_t sz = keyMap[i].size;
     size_t read = prefs.getBytes(keyMap[i].key, field, sz);
+    if (strcmp(keyMap[i].key, "mdnsname") == 0 && read != sz) missingMdnsName = true;  //my line
     keyCount++;
   }
   {
@@ -131,6 +141,11 @@ void Config::loadPreferences() {
   CONFIGTIMELOG("deleteOldKeys");
   prefs.end();
   CONFIGTIMELOG("prefs.end");
+  if (missingMdnsName) {  //my line
+    char name[MDNS_LENGTH];  //my line
+    defaultMdnsName(name, sizeof(name), getChipId());  //my line
+    saveValue(store.mdnsname, name);  //my line
+  }  //my line
 }
 
 void Config::saveLastStationUrl(const char* url, uint16_t waitMs) {
@@ -572,7 +587,7 @@ void Config::defaultSettings(const char *val, uint8_t clientId) {
     saveValue(&store.autoupdate, false);
     saveValue(&store.ehdp, (bool)EHDP);
     saveValue(store.ehdpname, "");
-    char tmp[MDNS_LENGTH]; snprintf(tmp, MDNS_LENGTH, "ehradio-%x", getChipId()); saveValue(store.mdnsname, tmp);
+    char tmp[MDNS_LENGTH]; defaultMdnsName(tmp, sizeof(tmp), getChipId()); saveValue(store.mdnsname, tmp);  //my line
     netserver.requestOnChange(GETSYSTEM, clientId);
     return;
   }
@@ -611,7 +626,9 @@ void Config::setDefaults() {
   nvs_flash_erase();
   nvs_flash_init();
   // defaults set by struct, except one
-  snprintf(store.mdnsname, MDNS_LENGTH, "ehradio-%x", getChipId());
+  char tmp[MDNS_LENGTH];  //my line
+  defaultMdnsName(tmp, sizeof(tmp), getChipId());  //my line
+  saveValue(store.mdnsname, tmp);  //my line
   // Write the sentinel immediately after erase so the next boot finds a valid cfgset
   // and does not loop back into reset() again
   prefs.begin("ehradio", false);

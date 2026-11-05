@@ -1,56 +1,16 @@
 {
-  "project": "ehRadio",
-  "version": "2026.08.19",
+  "project": "ESP32-Radio",
+  "version": "2026.11.04",
   "variants": [
     {
-      "name": "Another-Taipan Taipan_streamer_1",
-      "manifest": "manifests/Another-Taipan_taipan_streamer_1-manifest.json",
-      "description": "ehRadio - Another-Taipan_taipan_streamer_1"
-    },
-    {
-      "name": "Kasperaitis es3c28p",
-      "manifest": "manifests/kasperaitis_es3c28p-manifest.json",
-      "description": "ehRadio - kasperaitis_es3c28p"
+      "name": "Death-Kiss78 es3n28s",
+      "manifest": "manifests/death-kiss78_es3n28s-manifest.json",
+      "description": "ESP32-Radio - death-kiss78_es3n28s"
     },
     {
       "name": "No Display No Display",
       "manifest": "manifests/no_display_test-manifest.json",
-      "description": "ehRadio - no_display_test"
-    },
-    {
-      "name": "Trip5 Big Color Screen with 1-Button",
-      "manifest": "manifests/trip5_ili9488_pcm_1button-manifest.json",
-      "description": "ehRadio - trip5_ili9488_pcm_1button"
-    },
-    {
-      "name": "Trip5 Big Color Screen with 1-Button Redux",
-      "manifest": "manifests/trip5_ili9488_vs1053_1button-manifest.json",
-      "description": "ehRadio - trip5_ili9488_vs1053_1button"
-    },
-    {
-      "name": "Trip5 Color Screen with 1-Button",
-      "manifest": "manifests/trip5_st7735_pcm_1button-manifest.json",
-      "description": "ehRadio - trip5_st7735_pcm_1button"
-    },
-    {
-      "name": "Trip5 ES3C28P",
-      "manifest": "manifests/trip5_es3c28p-manifest.json",
-      "description": "ehRadio - trip5_es3c28p"
-    },
-    {
-      "name": "Trip5 OLED with 1-Button",
-      "manifest": "manifests/trip5_sh1106_pcm_1button-manifest.json",
-      "description": "ehRadio - trip5_sh1106_pcm_1button"
-    },
-    {
-      "name": "Trip5 OLED with 3-Buttons",
-      "manifest": "manifests/trip5_sh1106_vs1053_3buttons-manifest.json",
-      "description": "ehRadio - trip5_sh1106_vs1053_3buttons"
-    },
-    {
-      "name": "Trip5 OLED with Remote",
-      "manifest": "manifests/trip5_sh1106_pcm_remote-manifest.json",
-      "description": "ehRadio - trip5_sh1106_pcm_remote"
+      "description": "ESP32-Radio - no_display_test"
     }
   ]
 }

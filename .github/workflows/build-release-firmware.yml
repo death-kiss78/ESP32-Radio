@@ -113,7 +113,7 @@ jobs:
           echo "📦 Creating Upload_Files.zip..."
           mkdir -p upload_pkg/www upload_pkg/data
           cp www_release/* upload_pkg/www/
-          cp builds/releases/playlist.csv builds/releases/wifi.csv upload_pkg/data/
+          cp builds/data/playlist.csv builds/data/wifi.csv upload_pkg/data/
           cd upload_pkg
           zip -r ../Upload_Files.zip .
           cd ..
@@ -131,7 +131,7 @@ jobs:
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
           echo "tag=${VERSION}" >> $GITHUB_OUTPUT
           echo "Final version: ${VERSION}"
-          echo "ehRadio (Trip5) Version $(grep -oP '#define RADIOVERSION "\K[^"]+' src/core/options.h)" > version.txt
+          echo "ESP32-Radio (death-kiss78) Version $(grep -oP '#define RADIOVERSION "\K[^"]+' src/core/options.h)" > version.txt
 
       - name: Validate version matches options.h
         run: |
@@ -250,7 +250,7 @@ jobs:
             Upload_Files.zip
           retention-days: 90
 
-      - name: Create ehRadio Release
+      - name: Create ESP32-Radio Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.get_version.outputs.tag }}

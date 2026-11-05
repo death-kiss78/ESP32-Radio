@@ -418,6 +418,15 @@ table.stations .importantmessage { color: var(--heading-text) !important; font-s
   border-radius: 20px; cursor: pointer; text-align: center; min-width: 120px; margin-right: 20px; color: var(--button-text); background: var(--button-fill); font-family: Times, "Times New Roman", serif; }
 @media (hover: hover) and (pointer: fine) { /* mouse only */ #updateform input[type=file]::file-selector-button:hover { color: var(--button-fill); background: var(--button-outline); } }
 #updateform .fb { margin: 0; font-family: Times, "Times New Roman", serif; }
+#sleepform { width: 50%; display: flex; flex-direction: column; align-items: center; margin: 0; padding: 0 0 2em; }
+#sleepform .row { width: 100%; margin: 10px 0; }
+#sleepform .row:first-child { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 16px; }
+#sleepform label { display: block; color: var(--main-hl-color); font-size: 16px; text-transform: var(--tt-uppercase); }
+#sleepform label[for="sleepduration"] { grid-column: 1; grid-row: 1; }
+#sleepform #sleepduration { grid-column: 1; grid-row: 2; }
+#sleepform label[for="sleepafter"] { grid-column: 2; grid-row: 1; }
+#sleepform #sleepafter { grid-column: 2; grid-row: 2; }
+#sleepform .fb { margin: 0; font-family: Times, "Times New Roman", serif; }
 #updateprogress { background-color: var(--meter-track); border: var(--meter-outline) 2px solid; height: 30px; border-radius: 15px; width: 100%; margin: 0; overflow: hidden; }
 #updateprogress::-webkit-progress-bar { overflow: hidden; background-color: var(--meter-track); border-radius: 15px; }
 #updateprogress::-webkit-progress-value { background-color: var(--meter-fill); border-radius: 15px 0 0 15px; }

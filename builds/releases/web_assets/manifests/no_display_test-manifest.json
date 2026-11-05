@@ -1,7 +1,6 @@
 {
-  "name": "ehRadio - No Display",
-  "version": "2026.08.19",
-  "funding_url": "https://github.com/sponsors/trip5",
+  "name": "ESP32-Radio - No Display",
+  "version": "2026.11.04",
   "builds": [
     {
       "chipFamily": "ESP32-S3",

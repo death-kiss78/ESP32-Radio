@@ -153,6 +153,17 @@
         </span>
       </div>
     </div>
+    <div class="search-row" style="margin: 4px 0;">
+      <span id="playlistfilterlabel" class="hidden" data-i18n="lbl_playlist_search">Search stations</span>
+      <input type="search" class="searchtextinput" id="playlistfilter" aria-labelledby="playlistfilterlabel" data-i18n="lbl_playlist_search" placeholder="Search stations"
+        style="flex: 1; min-width: 0; box-sizing: border-box; background: var(--input-fill); color: var(--input-text); padding: 6px; font-size: 16px; border: var(--input-border) 1px solid; border-radius: 4px; min-height: 32px;"
+        oninput="const list=document.getElementById('playlist'); const filter=()=>{const query=this.value.trim().toLowerCase(); list.querySelectorAll('li[data-name]').forEach(item=>item.style.display=item.dataset.name.toLowerCase().includes(query)?'':'none');}; filter(); if(!this.filterObserver){this.filterObserver=new MutationObserver(filter);this.filterObserver.observe(list,{childList:true});}">
+      <button type="button" class="searchbutton search minus" aria-labelledby="playlistfilterclearlabel"
+        onclick="const input=document.getElementById('playlistfilter'); input.value=''; input.dispatchEvent(new Event('input',{bubbles:true})); input.focus();">
+        <svg viewBox="0 0 24 24" class="stroke" aria-hidden="true"><path d="M5 5l14 14m0-14L5 19"></path></svg>
+        <span id="playlistfilterclearlabel" class="hidden" data-i18n="btn_clear_playlist_search">Clear search</span>
+      </button>
+    </div>
     <ul id="playlist"></ul>
   </div><!--equalizerwrap-->
   <div id="copy">powered by <a target="_blank" href="https://trip5.github.io/ehRadio/">ehRadio</a> |
