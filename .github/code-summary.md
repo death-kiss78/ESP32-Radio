@@ -55,6 +55,15 @@ is defined. They share their defect classes, and the same bug has repeatedly app
 - `.github/workflows/build-release-firmware.yml` verifies generated contributor release artifacts by re-running
   `builds/fix_releases.py` on CI and diff-checking `builds/releases/` (contains `firmware.txt`, `releases.md`, and
   `web_assets/`) against what was committed.
+- Both release workflows also produce one `<board_env>_filesystem.bin` per board: `pio run -e <env> -t buildfs`, then
+  the image is copied out of `$BUILD_DIR/littlefs.bin` and deduplicated with an `fs_done` map, exactly like the
+  bootloader and partitions. Content is identical across variants, so one image per partition layout is enough. If
+  `buildfs` produces `spiffs.bin` instead, `board_build.filesystem` is wrong in that contributor's `platformio.ini`
+  and the step warns rather than shipping an image LittleFS cannot mount.
+- `builds/fix_releases.py` resolves each board's partition CSV (env -> `extends` chain -> `board_build.partitions` ->
+  the `littlefs` row) and writes a non-standard `filesystem` entry (`path`, `offset`, `size`) into every manifest.
+  ESP Web Tools ignores it; `docs/flasher.html` uses it to write the WebUI filesystem when "Full reinstall" is ticked,
+  which is why that path skips the first-boot format and the later download of the web files.
 - `.github/workflows/build-deploy-page.yml` deploys Pages on `release.published`, and on branch/manual runs it preserves
   the currently published `firmware-info.json` and manifests instead of overwriting them from `builds/*/web_assets`.
 - `.github/workflows/update-timezones.json-automatically.yml` checks out using `DEPLOY_KEY` and pushes over SSH to
@@ -1315,6 +1324,23 @@ thinks the radio forgot everything. The loader-side wait (`plans/network-recover
   there is no strip yet but `_ssStripH()` has become true - nothing playing and no weather cached at entry,
   where only a rebuild can create the widget - and otherwise updates the line as before.
 - Render queue + display task + widget/page orchestration.
+- **The render queue cannot refuse a request.** `displayQueue` is 10 slots of `requestParams_t` (two ints: about 160 B
+  with FreeRTOS's queue header, internal heap), and a `putRequest()` that finds it full waits `DSQ_SEND_DELAY` (200 ms)
+  and then **evicts the OLDEST item** (`xQueueReceive` with a 0-tick timeout) to take its place - logged with the
+  victim's type and counted in `_evictedRequests`; `_droppedRequests` now only counts the case where even that failed,
+  which should be unreachable. The oldest is the right victim because everything in this queue is "make the screen look
+  like X now": the handlers re-read live state when they run (`_title()` re-reads `config.station.title`, `NEWWEATHER`
+  re-reads `weatherBuf`) and the paired ones are last-wins (`PSTART`/`PSTOP` -> `_layoutChange(true/false)`, `NEWMODE`,
+  `APPLYSTATE`, `SHOWVUMETER`, `DRAWVOL`), so losing the older half of a pair is harmless. `SDINDEXSTART`/`SDINDEXDONE`
+  still wait for room (`DSQ_CRITICAL_WAIT`) rather than queue behind an eviction. This replaced drop-the-newcomer, which
+  lost a `NEWTITLE` outright on a saturated queue and left the previous track's title on the panel - the Big Text
+  "title 2 pixels around the weather" report. See `plans/big-text-title2-weather-overlap.md`.
+- **`playerQueue` is split by TYPE instead**, because its entries are commands with side effects and an order:
+  `PR_CHECKSD`/`PR_VUTONUS` are skipped outright when the queue has one free slot or fewer (idempotent, re-issued two
+  seconds later - the field's `dropped cmd=7` was one of these), while `PR_PLAY`/`PR_STOP`/`PR_PREV`/`PR_NEXT`/
+  `PR_TOGGLE`/`PR_VOL`/`PR_BURL` keep trying for `PLQ_CRITICAL_WAIT` (500 ms) before giving up. With the ticks kept out
+  of a queue that is nearly full, it can only fill with commands, which is what makes that wait a rare path rather than
+  a stall for whoever enqueued.
 - **Theme/layout/invert runtime switching** — major refactor:
   - `_applyState()` — central state function: loads layout from PROGMEM, loads theme from PROGMEM (TFT only), applies
     invert (color swap + `metaBGConf_ptr` switch), reinitializes widgets, redraws. Called by all three commands
@@ -1465,8 +1491,6 @@ thinks the radio forgot everything. The loader-side wait (`plans/network-recover
 - HTTP sleep queries treat `sleep` as an optional wake-up duration and `after` as an independent delay before
   deep sleep (both minutes); an omitted or zero wake duration leaves the timer wake source disabled. The HTTP
   handler folds the two into one comma-encoded `sleep=sfor,after` command and skips the bare `after`.
-  `sleep=0&after=0` is accepted as immediate deep sleep without a timer wake.
-- The WebUI update page has a GET form for the same `sleep` and `after` parameters.
 - HTTP + WebSocket + upload/update + search/curated orchestration.
 - **`PLVALIDATE`** (a new `requestType_e`) carries the Playlist Validator's progress: start/count, one `{i, r}`
   per station, then done. See `src/core/playlistvalidator.cpp`.
@@ -4349,6 +4373,18 @@ thinks the radio forgot everything. The loader-side wait (`plans/network-recover
     and the step cannot disagree; `_active` is in it because `_calcX()` claims the slot whether or not anything is
     drawn, so an inactive-but-unlocked line used to be able to own the slot invisibly. This is the "the weather line
     scrolls constantly and title 2 never gets a turn" report. See `plans/scroll-turn-fairness.md`.
+  - **A line erases only its OWN box; nothing clears it because another line moved onto it.** Three things remove a
+    scroll line's pixels - its own `setText()` (the union of the old and new text rectangle, or the whole recorded span
+    after it has scrolled - `_spanPainted()`), `lock()`/`_reset()` (`_clear()`, and `freeBuffer()` which erases the
+    window on the panel only if it was ever `display()`ed), and a page repaint. That is deliberate: it is what lets two
+    widgets share one row (`_windowRect()` narrows a fitting line to its glyphs). The consequence to know about is
+    geometric - two TEXT rows closer than `CHARHEIGHT * textsize` interleave, because the lower one cannot reach above
+    its own top edge. `displayTFT480x320conf.h`'s Big Text layout is the one shipped case: `title2Conf` top 95 against
+    `weatherConf` top 100 at textsize 3 (a 24 px row), so 19 px of the two rows overlap and five rows of title 2 sit
+    above the weather's box. 128x128 and 160x128 overlap by 2 px, 320x240 by 1 px, every other conf is clear. The layout
+    editor's collision check cannot flag it: it reports intersecting boxes and cannot tell a background band
+    (`metaBGConf`) from two text rows. Left as the layout's own business - see
+    `plans/big-text-title2-weather-overlap.md`.
   - `ProgressWidget` is the boot screen's animated dots line, with exactly one instantiation (`Display::_bootScreen()`),
     so its behaviour is the boot screen's. The line is `speaker + runway + boot glyph`, hard against both glyphs, and
     `ProgressConfig` is `{ frame interval ms, line character width, blob elements }` — every conf carries that header
@@ -4723,16 +4759,23 @@ behaviors:
   - **`ICON_TABLE` and `ICON_TABLE_2`..`ICON_TABLE_5` are all emitted**, NULL where a mark has no variant, so
     the lookup needs no `#if` and a new scale cannot leave the header unbuildable. A NULL slot falls through to
     the normal glyph handling exactly as before (`\011`, `\012`, `\036`).
-  - **`src/displays/icons_tool.py`, beside the header, owns the arrays' shape and never their pixels:**
-    `-x NAME N`, `--force`,
-    `--list`, `--check`, `--fix`, `--stats`. It is selective and seed-only - no bulk pass, and an existing
-    variant is left as found unless `--force`, so hand-tuning survives every run. `--check` fails on a row
-    count that is not `8*N`, a row wider than `6*N`, a `uint8_t` declaration above scale 1, a table slot that
-    disagrees with its codepoint, and a pixel comment that disagrees with its own row value. `--fix` rewrites
-    the COMMENT from the value and prints every change: the report is the only thing that can say whether the
-    comment or the drawing was wrong, so it is never a quiet rewrite. The header is committed, like
-    `pretext_fold.h`, and the pixel comments cost no flash - the preprocessor strips them. See
-    `plans/icon-size-variants.md`.
+  - **`src/displays/icons_tool.py`, beside the header, owns the arrays' shape and never their pixels.**
+    Generation is selective and seed-only: `-s NAME N` (with `--force`) seeds one variant from the largest
+    existing divisor, so no mark gets a size it was not asked for and hand-tuning survives every run.
+    Two reconciliation DIRECTIONS exist because a row value and its comment can disagree and only the
+    author knows which half is the drawing: `-b` rebuilds the value from the comment, `-c` regenerates the
+    comment from the value, and the bare run asks per mark (keep binary / keep comment / skip).
+    `--check` reports each fault as a WHOLE-glyph block - all `8*N` rows, value and comment side by side,
+    under the declaration line - and one line each for a row count that is not `8*N`, a row wider than
+    `6*N`, a `uint8_t` declaration above scale 1, a name declared twice, a table slot that names a mark
+    that no longer exists or misses one that does, and a pixel comment that disagrees with its row value.
+    Table faults are settled in the bare run by regenerating the tables, which is exact because the writer
+    derives every slot from the declarations. `-o LEFT RIGHT` writes two marks side by side to
+    `icon_stitch.txt` at every scale both have; `-i` reads it back after validating each row's width,
+    characters, count, names and column codepoints, reporting against the SHEET's line numbers and writing
+    nothing on any problem. `--stats` reports the data cost in B and KB, the per-build copy projection, and
+    what it does not count. The header is committed, like `pretext_fold.h`, and the pixel comments cost no
+    flash - the preprocessor strips them. See `plans/icon-size-variants.md`.
   - **These arrays are `static` in a header, so each TU that emits `_writeGlyph()` keeps its own copy** -
     measured in the linker map as two copies in a PSFBUFFER TFT env and three in an OLED env. That is
     pre-existing behaviour of the scale-1 bitmaps, accepted at ~64-370 B per array copy.

@@ -2,7 +2,7 @@
 #define options_h
 #pragma once
 
-#define RADIOVERSION "2026.11.04"  //my line
+#define RADIOVERSION "2026.10.30"
 
 /*******************************************************
  
@@ -1019,7 +1019,7 @@ or examine the examples in builds/trip5 and make your own!
 /* --- SOURCE OF UPDATE FILES --- */
 /* only used if FIRMWARE is defined as it is in Trip5's automatic Github builds */
 #ifndef GITHUBURL
-  #define GITHUBURL "https://github.com/death-kiss78/ESP32-Radio" // used by the ESPFileUpdater in BrowserClient (and in URLs below)  //my line
+  #define GITHUBURL "https://github.com/trip5/ehradio" // used by the ESPFileUpdater in BrowserClient (and in URLs below)
 #endif
 
 #ifdef ENABLE_UPDATER // if this is defined, enables online updates

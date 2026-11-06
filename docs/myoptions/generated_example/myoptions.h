@@ -39,7 +39,7 @@
 
 
 /* --- Firmware File & Board --- */
-#define FIRMWARE_NAME        "es3c28p" /* your ESP32-Radio's name */
+#define FIRMWARE_NAME        "es3c28p" /* your ehRadio's name */
 
 /* --- SPI Bus Pins --- */
 #define SPIA_SCK             12

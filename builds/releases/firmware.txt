@@ -1,2 +1,3 @@
-esp32_s3_n16r8|ESP32-S3|death-kiss78_es3n28s|es3n28s
+esp32_s3_n16r8|ESP32-S3|death-kiss78_es3c28s|es3c28s
+esp32_s3_n16r8|ESP32-S3|kasperaitis_es3c28p|es3c28p
 esp32_s3_n16r8|ESP32-S3|no_display_test|No Display

@@ -1,6 +1,6 @@
 {
-  "name": "ehRadio - Color Screen with 1-Button",
-  "version": "2026.08.19",
+  "name": "ehRadio - es3c28s",
+  "version": "2026.10.30",
   "funding_url": "https://github.com/sponsors/trip5",
   "builds": [
     {
@@ -15,10 +15,15 @@
           "offset": 32768
         },
         {
-          "path": "../firmware/trip5_st7735_pcm_1button.bin",
+          "path": "../firmware/death-kiss78_es3c28s.bin",
           "offset": 65536
         }
       ]
     }
-  ]
+  ],
+  "filesystem": {
+    "path": "../firmware/esp32_s3_n16r8_filesystem.bin",
+    "offset": 6750208,
+    "size": 1572864
+  }
 }

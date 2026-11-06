@@ -54,7 +54,7 @@ ehRadio inherits a lot from ёRadio, but improvements have been made to make it 
   - radio station streams can be directly added to using [Radio-browser](https://www.radio-browser.info/) API search
   - upload files directly using the SD Card Manager
 
-- [Web flasher](https://trip5.github.io/ehRadio/firmware.html) & Internet OTA updates
+- [Web flasher](https://trip5.github.io/ehRadio/flasher.html) & Internet OTA updates
   - make getting a new version easy-peasy
   - *caveat:* your build must be in the `builds` folder of this repository
 
@@ -246,7 +246,7 @@ I can't 100% confirm this, but I am pretty sure all devices built for other ESP-
 And although (as of `2026.06.15`), ehRadio has been reworked so an ESP32-S3 can be wired with an SPI display and a VS1053 (which ёRadio & ESP32-RadioV2 can't),
 
 Below here are some sketches and helpful hints to building one of the "prebuilt" firmwares as available in the Releases and the
-[online flasher](https://trip5.github.io/ehRadio/firmware.html).
+[online flasher](https://trip5.github.io/ehRadio/flasher.html).
 
 If you already have a good idea on how the hardware works and would just like to use a prebuilt binary,
 check out the [Releases](https://github.com/trip5/ehRadio/releases/) and click on a link to open the generator with that binary's profile,
@@ -369,7 +369,7 @@ For that and other major needed changes to the codebase, there is a `code-issues
 
 | Date       | Release Notes    |
 | ---------- | ---------------- |
-| 2026.11.03 `dev` | ***Breaking changes*** LittleFS (not SPIFFS), SD File Manager (and fixes to SD Mode), Playlist Validator, both screen fonts changeable while running, SDMMC, Boot speed improved, major work on layouts and VU (all displays & changeable while running, theme/layout editor added), screensaver VU & info text, fixes to: SSD1322 & SSD1327 & NV3007 added (thanks kle7rx!), `ROTATE_90` for square displays, WebUI, IR code overhauled (mute/power added), recovery from network stack crashes and Wi-fi and stream reconnects, library change: `elims/PsychicMqttClient` & MQTT/HA improved, LCD displays removed, HLS AAC streams |
+| 2026.11.05 `dev` | ***Breaking changes*** LittleFS (not SPIFFS), SD File Manager (and fixes to SD Mode), SDMMC, Playlist Validator, major work on layouts, screen fonts, themes, and VU (for all displays & changeable while running, theme/layout editor added), screensaver VU & info text, fixes to: SSD1322 & SSD1327 & NV3007 added (thanks kle7rx!), `ROTATE_90` for square displays, WebUI updates, IR code overhauled (mute/power added), recovery from network stack crashes and Wi-fi and stream reconnects, library change: `elims/PsychicMqttClient` & MQTT/HA improved, LCD displays removed, HLS AAC streams fixed, icons increased resolution, many patches to the audio libraries, boot time shorter |
 | 2026.08.19 | Stability and bug fixes (SD Offline), documentation |
 | 2026.08.13 | Memory usage, stability, and bug fixes (especially to SD, VS1053) |
 | 2026.08.03 | Minor fixes (and whoops) fixed Search and Curated |

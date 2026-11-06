@@ -1,5 +1,5 @@
 // @ts-nocheck
-/*  ESP32-Radio myoptions Generator - generator.js
+/*  ehRadio myoptions Generator - generator.js
  *  Reads JSON config files and builds a dynamic hardware configuration page.
  *  State is serialized via LZ-string into the URL hash for shareable links.
  * 
@@ -2415,8 +2415,8 @@ function generatePlatformioIni() {
 
   // Get firmware name for the env
   var firmwareNameCtrl = document.querySelector('[data-define="FIRMWARE_NAME"]');
-  var firmwareName = firmwareNameCtrl ? firmwareNameCtrl.value : 'my_esp32radio';
-  var envName = firmwareName.toLowerCase().replace(/[^a-z0-9_]/g, '_').replace(/^_+|_+$/g, '') || 'my_esp32radio';
+  var firmwareName = firmwareNameCtrl ? firmwareNameCtrl.value : 'my_ehradio';
+  var envName = firmwareName.toLowerCase().replace(/[^a-z0-9_]/g, '_').replace(/^_+|_+$/g, '') || 'my_ehradio';
 
   // Compute shareable URL to embed in the platformio.ini header comment
   var pioState = serializeState();
