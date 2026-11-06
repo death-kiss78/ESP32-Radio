@@ -2,7 +2,7 @@
 
 # ehRadio
 
-***This documentation is the same on the [Github Page](https://trip5.github.io/ehRadio/), which may be easier to read.***
+***This documentation is the same on the [Github Page](https://death-kiss78.github.io/ESP32-Radio/), which may be easier to read.***
 
 ## Introduction
 
@@ -54,7 +54,7 @@ ehRadio inherits a lot from ёRadio, but improvements have been made to make it 
   - radio station streams can be directly added to using [Radio-browser](https://www.radio-browser.info/) API search
   - upload files directly using the SD Card Manager
 
-- [Web flasher](https://trip5.github.io/ehRadio/flasher.html) & Internet OTA updates
+- [Web flasher](https://death-kiss78.github.io/ESP32-Radio/flasher.html) & Internet OTA updates
   - make getting a new version easy-peasy
   - *caveat:* your build must be in the `builds` folder of this repository
 
@@ -103,7 +103,7 @@ More screenshots from the WebUI are [here](WebUI.md).
 
 ## Documentation
 
-The best starting point (after reading this page) is the [myoptions Generator](https://trip5.github.io/ehRadio/myoptions/generator.html).
+The best starting point (after reading this page) is the [myoptions Generator](https://death-kiss78.github.io/ESP32-Radio/myoptions/generator.html).
 This can assist in making a very good `myoptions.h` file, which should be placed in the root of the build folder next to `platformio.ini` (which the generator also makes).
 
 The generator contains almost all supported hardware peripherals and build options which can be used when building an ehRadio, as well as many notes.
@@ -246,10 +246,10 @@ I can't 100% confirm this, but I am pretty sure all devices built for other ESP-
 And although (as of `2026.06.15`), ehRadio has been reworked so an ESP32-S3 can be wired with an SPI display and a VS1053 (which ёRadio & ESP32-RadioV2 can't),
 
 Below here are some sketches and helpful hints to building one of the "prebuilt" firmwares as available in the Releases and the
-[online flasher](https://trip5.github.io/ehRadio/flasher.html).
+[online flasher](https://death-kiss78.github.io/ESP32-Radio/flasher.html).
 
 If you already have a good idea on how the hardware works and would just like to use a prebuilt binary,
-check out the [Releases](https://github.com/trip5/ehRadio/releases/) and click on a link to open the generator with that binary's profile,
+check out the [Releases](https://death-kiss78.github.io/ESP32-Radio/releases/) and click on a link to open the generator with that binary's profile,
 which includes hardware needed, pins to connect, and more.
 There is also a `no_display` build here if you just wish to test functionality.
 
@@ -401,10 +401,6 @@ For that and other major needed changes to the codebase, there is a `code-issues
 | 2025.08.10 | `ehRadio begins`, folders restructured, `data\` files stay uncompressed (compressed in from Releases, which radio can download), timezones.json updated automatically |
 | 2025.07.23 | more options in WebUI |
 | 2025.07.19 | PR to ёRadio v0.9.533: EEProm storage changed to Preferences, fixes for screens that can't display certain characters, ESPFileUpdater added (updates timezones and Radio Browser servers), proper timezones, many macros added to `myoptions.h`, Radio station search, Playback queue now RTOS background task, improved JSON and CSV file importing, maleksm's backlightdown and decoder improvements, ESP8266 support removed |
-
-### Old Readme
-
-A full history of ёRadio from v0.4.177 to v0.9.533 can be seen in the [old Readme](README.old.md).
 
 ### Credit
 
