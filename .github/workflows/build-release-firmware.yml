@@ -113,7 +113,7 @@ jobs:
           echo "📦 Creating Upload_Files.zip..."
           mkdir -p upload_pkg/www upload_pkg/data
           cp www_release/* upload_pkg/www/
-          cp builds/releases/playlist.csv builds/releases/wifi.csv upload_pkg/data/
+          cp builds/data/playlist.csv builds/data/wifi.csv upload_pkg/data/
           cd upload_pkg
           zip -r ../Upload_Files.zip .
           cd ..
@@ -131,7 +131,7 @@ jobs:
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
           echo "tag=${VERSION}" >> $GITHUB_OUTPUT
           echo "Final version: ${VERSION}"
-          echo "ehRadio Version $(grep -oP '#define RADIOVERSION "\K[^"]+' src/core/options.h)" > version.txt
+          echo "ESP32-Radio (death-kiss78) Version $(grep -oP '#define RADIOVERSION "\K[^"]+' src/core/options.h)" > version.txt
 
       - name: Validate version matches options.h
         run: |
@@ -155,6 +155,9 @@ jobs:
         run: |
           # Track which board_envs have had bootloader/partitions extracted
           declare -A board_done
+          # And which ones already have a filesystem image: content is identical for every
+          # variant on the same partition layout, so one image per board is enough.
+          declare -A fs_done
 
           for subfolder in builds/*/; do
             folder_name=$(basename "$subfolder")
@@ -207,6 +210,29 @@ jobs:
                   board_done[$board_env]=1
                 fi
               fi
+
+              # Filesystem image for the same board (first occurrence only). This is what the
+              # online flasher writes when "Erase the whole flash" is ticked, so the radio boots
+              # with its WebUI already in place instead of formatting and downloading it.
+              if [ -n "$board_env" ] && [ -z "${fs_done[$board_env]+x}" ]; then
+                echo "  📦 ${board_env}: building filesystem image from ${pio_env}..."
+                if pio run -e "$pio_env" -t buildfs > /tmp/buildfs.log 2>&1; then
+                  if [ -f "$d/littlefs.bin" ]; then
+                    cp "$d/littlefs.bin" "binaries/${board_env}_filesystem.bin"
+                    echo "  ✅ ${board_env}_filesystem.bin"
+                    fs_done[$board_env]=1
+                  elif [ -f "$d/spiffs.bin" ]; then
+                    echo "  ⚠️  ${board_env}: buildfs produced spiffs.bin, not littlefs.bin."
+                    echo "      board_build.filesystem must be littlefs in builds/${folder_name}/platformio.ini"
+                    echo "      A SPIFFS image cannot be mounted as LittleFS, so nothing was copied."
+                  else
+                    echo "  ⚠️  ${board_env}: buildfs succeeded but left no image in ${d}"
+                  fi
+                else
+                  echo "  ⚠️  ${board_env}: buildfs failed for ${pio_env}"
+                  tail -n 20 /tmp/buildfs.log || true
+                fi
+              fi
             done
           done
 
@@ -250,7 +276,7 @@ jobs:
             Upload_Files.zip
           retention-days: 90
 
-      - name: Create ehRadio Release
+      - name: Create ESP32-Radio Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.get_version.outputs.tag }}

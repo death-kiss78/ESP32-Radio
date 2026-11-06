@@ -1,9 +1,9 @@
-# ESP32-Radio Hardware Choices
+# ehRadio Hardware Choices
 
 There are many considerations to make when building a radio.
 Here are listed all of the supported hardware, some with more detail than others.
 
-When in doubt, also consult the [myoptions Generator](https://death-kiss78.github.io/ESP32-Radio/myoptions/generator.html)
+When in doubt, also consult the [myoptions Generator](https://trip5.github.io/ehRadio/myoptions/generator.html)
 which also contains tips about the hardware.
 
 ## ESP Board
@@ -203,7 +203,7 @@ There are various fixes available and it's up to you to see which one works for 
 
   - Some people report that reflowing the connections on the VS1053B chip fix their issues.
 
-  - Here is a fix that worked for death-kiss78 (did not attempt the reflow, ):
+  - Here is a fix that worked for Trip5 (did not attempt the reflow, ):
   
     Attach 100KΩ resistors from the 3.3V LDO to `XCS` and `XDCS` to pull them up.
     If the error persists, restore R2 with a solder bridge.
@@ -291,7 +291,7 @@ What actually matters for amp compatibility is **impedance (Ω)**:
 
 For a desktop internet radio, efficient 3–10W speakers (4–8Ω) are ideal. They'll produce more volume at low power than massive high-wattage speakers whose heavy cones need serious current to move. Small bookshelf or full-range drivers work best with these amps.
 
-### death-kiss78's Lazy PCM/Amp Combo
+### Trip5's Lazy PCM/Amp Combo
 
 If you don't care about audio or power isolation, you can solder the PCM5102A to a PAM8406 stereo amp.
 The PCM5102 output pins line up pretty nicely to the PAM8406's input pins.
@@ -337,12 +337,15 @@ If you find that your amplifier is buzzing, there are a few things to blame for 
 One suspect is usually backlight control. Typically these use PWM (Pulse Width Management) to achieve dimming.
 That adds interference. The easy fix is to disable dimming and tie the BL pin to 3V3.
 
+### Full Audio/Power Isolation
+
+You can read some (untested) schematics to achieve [Audio/Power Isolation](Isolation.md).
 
 ---
 
 ## Controls
 
-ESP32-Radio can be built with various control methods, including rotary encoders, buttons, an IR receiver, touchscreen, WebUI, Home Assistant, MQTT, Telnet, and HTTP.
+ehRadio can be built with various control methods, including rotary encoders, buttons, an IR receiver, touchscreen, WebUI, Home Assistant, MQTT, Telnet, and HTTP.
 
 The most basic physical control is a rotary encoder.  All major functions can be accomplished with just one encoder.
 
@@ -459,7 +462,7 @@ Most users will not remember the difference between "shortly after power-up" and
 
 Due to the playlist being stored as a 16-bit number internally, the limit is 65,535 audio files.
 
-### Special Note Regarding `/ESP32-Radio.data`
+### Special Note Regarding `/ehradio.data`
 
 This folder contains special index files to enable faster file-seeking during playback.
 

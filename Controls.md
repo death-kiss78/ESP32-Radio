@@ -1,4 +1,4 @@
-# ESP32-Radio Controls
+# ehRadio Controls
 
 ## Physical Controls
 
@@ -107,7 +107,7 @@ Check options.h for tuning options (TS_STEPS, TS_SWIPE_THRESHOLD_PX, TS_COOLDOWN
 ## Home Assistant Component
 
 A Home Assistant custom integration is available in the `HA` folder.
-Copy `ESP32-Radio` and its contents into Home Assistant's `custom_components` folder.
+Copy `ehradio` and its contents into Home Assistant's `custom_components` folder.
 
 ![image](images/HomeAssistant1.png)
 
@@ -117,7 +117,7 @@ It will pull artwork when available in the stream.
 
 MQTT is switched on in the WebUI (Settings > MQTT). No build-time define is needed.
 
-Update `custom_components/ESP32-Radio` whenever you update the firmware: this release changed the MQTT topics,
+Update `custom_components/ehradio` whenever you update the firmware: this release changed the MQTT topics,
 and an older component does not read the new `state` topic.
 
 The power button only puts the radio into standby, which is what the entity reports. The source list
@@ -127,23 +127,23 @@ stations instead of the web playlist.
 Add this to your `configuration.yaml`.
 ```
 media_player:
-  - platform: ESP32-Radio
-    name: My ESP32-Radio
-    root_topic: ESP32-Radio/myradio/
+  - platform: ehradio
+    name: My ehRadio
+    root_topic: ehradio/myradio/
 ```
 
 ---
 
 ## MQTT & Telnet & HTTP
 
-ESP32-Radio has a unified command handler that can process all of the same commands as the WebUI does.
+ehRadio has a unified command handler that can process all of the same commands as the WebUI does.
 
 ### MQTT
 
 Commands are terse because they are typed by hand in automations, and state is one fact per topic so a
 consumer can bind to a single topic without parsing anything.
 
-Publish commands to `<mqtttopic>command` (for example, `ESP32-Radio/myradio/command`).
+Publish commands to `<mqtttopic>command` (for example, `ehradio/myradio/command`).
 
 | Format       | Example Payload |
 | ------------ | -------------- |
