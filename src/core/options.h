@@ -1037,8 +1037,7 @@ or examine the examples in builds/trip5 and make your own!
     #define CHECKUPDATEURL GITHUBURL "/releases/latest/download/version.txt" // automatically extracted from options.h during Github workflow
   #endif
   #ifndef VERSIONSTRING
-    #define VERSIONSTRING "ehRadio (Trip5) Version" // the file above should have a line that starts with this followed by a version number
-    // Trip5 Note: changed from "ehRadio Version" to "ehRadio Version" as part of SPIFFS to LittleFS
+    #define VERSIONSTRING "ESP32-Radio Version" // the file above should have a line that starts with this followed by a version number
   #endif
   #ifndef CHECKUPDATEURL_TIME
     #define CHECKUPDATEURL_TIME "1 day"
