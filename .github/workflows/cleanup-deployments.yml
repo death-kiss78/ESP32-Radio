@@ -1,0 +1,36 @@
+name: Cleanup Deployments
+
+on:
+  workflow_dispatch:
+
+permissions:
+  deployments: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Delete old deployments
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          echo "Getting deployments..."
+
+          IDS=$(gh api repos/$REPO/deployments --jq '.[].id')
+
+          COUNT=$(echo "$IDS" | wc -l)
+
+          if [ "$COUNT" -le 1 ]; then
+            echo "Only one deployment found. Nothing to delete."
+            exit 0
+          fi
+
+          echo "$IDS" | tail -n +2 | while read ID
+          do
+            echo "Deleting deployment $ID"
+            gh api \
+              --method DELETE \
+              repos/$REPO/deployments/$ID || true
+          done
