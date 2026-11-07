@@ -135,8 +135,13 @@ function onMessage(event) {
     /*end online update*/
     
     if(typeof data.redirect !== 'undefined'){
-      getId("mdnsnamerow").innerHTML=`<h3 style="line-height: 37px;color: #aaa; margin: 0 auto;">${t('msg_redirecting', 'Redirecting to {0}', data.redirect)}</h3>`;
-      setTimeout(function(){ window.location.href=data.redirect; }, 4000);
+      const safeRedirect = getSafeRedirectUrl(data.redirect);
+      if(safeRedirect){
+        getId("mdnsnamerow").innerHTML=`<h3 style="line-height: 37px;color: #aaa; margin: 0 auto;">${t('msg_redirecting', 'Redirecting to {0}', safeRedirect)}</h3>`;
+        setTimeout(function(){ window.location.href = safeRedirect; }, 4000);
+      }else{
+        getId("mdnsnamerow").innerHTML=`<h3 style="line-height: 37px;color: #aaa; margin: 0 auto;">${t('msg_redirect_invalid', 'Invalid redirect target')}</h3>`;
+      }
       return;
     }
     /* playlist validator progress */
@@ -345,6 +350,16 @@ function escapeData(data){
     }
   }
   return data;
+}
+function getSafeRedirectUrl(target){
+  if(typeof target !== 'string' || target.trim() === '') return null;
+  try{
+    const parsed = new URL(target, window.location.origin);
+    if((parsed.protocol === 'http:' || parsed.protocol === 'https:') && parsed.origin === window.location.origin){
+      return parsed.href;
+    }
+  }catch(e){}
+  return null;
 }
 function getId(id,patent=document){
   return patent.getElementById(id);
