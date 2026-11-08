@@ -379,17 +379,25 @@ function escapeData(data){
 function getSafeRedirectUrl(target){
   if(typeof target !== 'string' || target.trim() === '') return null;
   try{
-    const parsed = new URL(target, window.location.origin);
-    if(!((parsed.protocol === 'http:' || parsed.protocol === 'https:') && parsed.origin === window.location.origin)) return null;
+    const trimmed = target.trim();
+    // Reject absolute/protocol-relative inputs from untrusted sources.
+    if(/^[a-z][a-z0-9+.-]*:/i.test(trimmed) || trimmed.startsWith('//')) return null;
+
+    const parsed = new URL(trimmed, window.location.origin);
+    if(parsed.origin !== window.location.origin) return null;
 
     const decodedPath = decodeURIComponent(parsed.pathname || '');
-    // Reject traversal (raw or encoded) and non-playlist endpoints.
+    // Reject traversal and unexpected characters.
     if(decodedPath.indexOf('..') !== -1) return null;
+    if(!/^\/[a-z0-9/_\-.]*$/i.test(decodedPath)) return null;
 
+    // Allow only known playlist endpoints/files.
     const isPlaylistPath =
-      decodedPath.startsWith('/playlist') ||
-      decodedPath.startsWith('/playlists') ||
-      /\.(m3u|m3u8|pls|txt)$/i.test(decodedPath);
+      decodedPath === '/playlist' ||
+      decodedPath === '/playlists' ||
+      decodedPath.startsWith('/playlists/') ||
+      /^\/playlist\.(m3u|m3u8|pls|txt)$/i.test(decodedPath) ||
+      /^\/playlists\/[a-z0-9._-]+\.(m3u|m3u8|pls|txt)$/i.test(decodedPath);
 
     if(!isPlaylistPath) return null;
 
