@@ -1551,9 +1551,10 @@ function continueLoading(mode){
           case "ehdpsave": websocket.send(`ehdpname=${getId('ehdpname').value}`); break;
           case "restartmdns": {
             const mdnsValue = (getId('mdns').value || '').trim();
-            websocket.send(`mdnsname=${mdnsValue}`);
-            if (mdnsValue && typeof redirectWhenReady === 'function') {
-              const mdnsHost = `${mdnsValue}.local`;
+            const safeMdnsLabel = sanitizeMdnsLabel(mdnsValue);
+            websocket.send(`mdnsname=${safeMdnsLabel || ''}`);
+            if (safeMdnsLabel && typeof redirectWhenReady === 'function') {
+              const mdnsHost = `${safeMdnsLabel}.local`;
               getId("mdnsnamerow").innerHTML=`<h3 style="line-height: 37px;color: #aaa; margin: 0 auto;">${t('msg_mdns_restarting', 'mDNS restarting...')}</h3>`;
               redirectWhenReady({
                 waitSeconds: 8,
@@ -1624,6 +1625,15 @@ function clearReadyRedirectTimers(){
   clearTimeout(rebootTimer);
   clearTimeout(readyPollTimer);
   clearTimeout(readyRedirectDelayTimer);
+}
+
+function sanitizeMdnsLabel(value){
+  const label = (value || '').trim().toLowerCase();
+  if (!label) return null;
+  if (label.length > 63) return null;
+  if (!/^[a-z0-9-]+$/.test(label)) return null;
+  if (label.startsWith('-') || label.endsWith('-')) return null;
+  return label;
 }
 
 function redirectWhenReady(options){
