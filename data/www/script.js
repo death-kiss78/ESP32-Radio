@@ -5,27 +5,8 @@ var modesd = false;
 const query = window.location.search;
 const params = new URLSearchParams(query);
 const Title = 'ehRadio';
-
-function sanitizeHost(inputHost) {
-  if (!inputHost || typeof inputHost !== 'string') return null;
-  const host = inputHost.trim().toLowerCase();
-  // Allow only local/same-network targets used by the device UI.
-  if (host === window.location.hostname.toLowerCase()) return host;
-  if (host === 'localhost') return host;
-  if (/^([a-z0-9-]+\.)*local$/.test(host)) return host; // mDNS style hostnames
-  // RFC1918 + loopback IPv4
-  if (/^(127)\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.test(host)) return host;
-  if (/^(10)\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.test(host)) return host;
-  if (/^(192)\.(168)\.(\d{1,3})\.(\d{1,3})$/.test(host)) return host;
-  if (/^(172)\.(1[6-9]|2\d|3[0-1])\.(\d{1,3})\.(\d{1,3})$/.test(host)) return host;
-  return null;
-}
-
 if(params.size>0){
-  if(params.has('host')) {
-    const safeHost = sanitizeHost(params.get('host'));
-    if (safeHost) hostname = safeHost;
-  }
+  if(params.has('host')) hostname=params.get('host');
 }
 var websocket;
 var wserrcnt = 0;
@@ -154,13 +135,8 @@ function onMessage(event) {
     /*end online update*/
     
     if(typeof data.redirect !== 'undefined'){
-      const safeRedirect = getSafeRedirectUrl(data.redirect);
-      if(safeRedirect){
-        getId("mdnsnamerow").innerHTML=`<h3 style="line-height: 37px;color: #aaa; margin: 0 auto;">${t('msg_redirecting', 'Redirecting to {0}', safeRedirect)}</h3>`;
-        setTimeout(function(){ window.location.href = safeRedirect; }, 4000);
-      }else{
-        getId("mdnsnamerow").innerHTML=`<h3 style="line-height: 37px;color: #aaa; margin: 0 auto;">${t('msg_redirect_invalid', 'Invalid redirect target')}</h3>`;
-      }
+      getId("mdnsnamerow").innerHTML=`<h3 style="line-height: 37px;color: #aaa; margin: 0 auto;">${t('msg_redirecting', 'Redirecting to {0}', data.redirect)}</h3>`;
+      setTimeout(function(){ window.location.href=data.redirect; }, 4000);
       return;
     }
     /* playlist validator progress */
@@ -326,13 +302,7 @@ function onMessage(event) {
     }else{
       if(typeof data.current !== 'undefined') { setCurrentItem(data.current); return; }
         if(typeof data.file !== 'undefined') {
-          const candidate = data.file + "?" + new Date().getTime();
-          const safePlaylistUrl = getSafeRedirectUrl(candidate);
-          if (safePlaylistUrl) {
-            generatePlaylist(safePlaylistUrl);
-          } else {
-            handlePlaylistData(null);
-          }
+          generatePlaylist(data.file+"?"+new Date().getTime());
           websocket.send('submitplaylistdone=1');
           websocket.send('getindex=1');
           return;
@@ -369,53 +339,12 @@ function escapeData(data){
   let m=data.match(/{.+?:\s"(.+?)"}/);
   if(m!==null){
     let m1 = m[1];
-    if(m1.indexOf('"') !== -1 || m1.indexOf('\\') !== -1){
-      let mq=m1.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+    if(m1.indexOf('"') !== -1){
+      let mq=m1.replace(/["]/g, '\\\"');
       return data.replace(m1,mq);
     }
   }
   return data;
-}
-function getSafeRedirectUrl(target){
-  if(typeof target !== 'string' || target.trim() === '') return null;
-  try{
-    const trimmed = target.trim();
-    // Reject absolute/protocol-relative inputs from untrusted sources.
-    if(/^[a-z][a-z0-9+.-]*:/i.test(trimmed) || trimmed.startsWith('//')) return null;
-
-    const parsed = new URL(trimmed, window.location.origin);
-    if(parsed.origin !== window.location.origin) return null;
-
-    const decodedPath = decodeURIComponent(parsed.pathname || '');
-    // Reject traversal and unexpected characters.
-    if(decodedPath.indexOf('..') !== -1) return null;
-    if(!/^\/[a-z0-9/_\-.]*$/i.test(decodedPath)) return null;
-
-    // Allow only known playlist endpoints/files and canonicalize to server-chosen values.
-    const canonicalPath = decodedPath.toLowerCase();
-    const allowedPlaylistPaths = new Set([
-      '/playlist',
-      '/playlist.m3u',
-      '/playlist.m3u8',
-      '/playlist.json',
-      '/playlist.txt'
-    ]);
-    if (!allowedPlaylistPaths.has(canonicalPath)) return null;
-
-    // Do not forward attacker-controlled query/hash; use canonical same-origin URL only.
-    return new URL(canonicalPath, window.location.origin).toString();
-      decodedPath === '/playlist' ||
-      decodedPath === '/playlists' ||
-      decodedPath.startsWith('/playlists/') ||
-      /^\/playlist\.(m3u|m3u8|pls|txt)$/i.test(decodedPath) ||
-      /^\/playlists\/[a-z0-9._-]+\.(m3u|m3u8|pls|txt)$/i.test(decodedPath);
-
-    if(!allowedPlaylistPaths.has(canonicalPath)) return null;
-
-    // Do not forward attacker-controlled query/hash; use canonical same-origin URL only.
-    return new URL(canonicalPath, window.location.origin).toString();
-  }catch(e){}
-  return null;
 }
 function getId(id,patent=document){
   return patent.getElementById(id);
@@ -597,32 +526,12 @@ function setModeSwitching(on){
   _switchTimer = window.setTimeout(function(){
     _switchTimer = null;
     setModeSwitching(false);
-    const candidate = `http://${hostname}/data/playlist.csv`+"?"+new Date().getTime();
-    const safePlaylistUrl = getSafeRedirectUrl(candidate);
-    if (safePlaylistUrl) generatePlaylist(safePlaylistUrl);
-    else handlePlaylistData(null);
+    generatePlaylist(`http://${hostname}/data/playlist.csv`+"?"+new Date().getTime());
   }, SWITCH_BACKSTOP_MS);
 }
 
 function generatePlaylist(path){
   getId('playlist').innerHTML='<div class="plloader"><span class="loader"></span></div>';
-  const safePath = getSafeRedirectUrl(path);
-  if (!safePath) {
-    handlePlaylistData(null);
-    return;
-  }
-  let requestPath = null;
-  try {
-    const parsedSafe = new URL(safePath, window.location.origin);
-    if (parsedSafe.origin !== window.location.origin) {
-      handlePlaylistData(null);
-      return;
-    }
-    requestPath = parsedSafe.pathname + parsedSafe.search;
-  } catch (e) {
-    handlePlaylistData(null);
-    return;
-  }
   var xhr = new XMLHttpRequest();
   xhr.onreadystatechange = function() {
     if (xhr.readyState == 4) {
@@ -633,7 +542,7 @@ function generatePlaylist(path){
       }
     }
   };
-  xhr.open("GET", requestPath);
+  xhr.open("GET", path);
   xhr.send(null);
 }
 function uncheckSelectAll(){
@@ -1627,10 +1536,9 @@ function continueLoading(mode){
           case "ehdpsave": websocket.send(`ehdpname=${getId('ehdpname').value}`); break;
           case "restartmdns": {
             const mdnsValue = (getId('mdns').value || '').trim();
-            const safeMdnsLabel = sanitizeMdnsLabel(mdnsValue);
-            websocket.send(`mdnsname=${safeMdnsLabel || ''}`);
-            if (safeMdnsLabel && typeof redirectWhenReady === 'function') {
-              const mdnsHost = `${safeMdnsLabel}.local`;
+            websocket.send(`mdnsname=${mdnsValue}`);
+            if (mdnsValue && typeof redirectWhenReady === 'function') {
+              const mdnsHost = `${mdnsValue}.local`;
               getId("mdnsnamerow").innerHTML=`<h3 style="line-height: 37px;color: #aaa; margin: 0 auto;">${t('msg_mdns_restarting', 'mDNS restarting...')}</h3>`;
               redirectWhenReady({
                 waitSeconds: 8,
@@ -1701,15 +1609,6 @@ function clearReadyRedirectTimers(){
   clearTimeout(rebootTimer);
   clearTimeout(readyPollTimer);
   clearTimeout(readyRedirectDelayTimer);
-}
-
-function sanitizeMdnsLabel(value){
-  const label = (value || '').trim().toLowerCase();
-  if (!label) return null;
-  if (label.length > 63) return null;
-  if (!/^[a-z0-9-]+$/.test(label)) return null;
-  if (label.startsWith('-') || label.endsWith('-')) return null;
-  return label;
 }
 
 function redirectWhenReady(options){
