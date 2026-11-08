@@ -5,8 +5,27 @@ var modesd = false;
 const query = window.location.search;
 const params = new URLSearchParams(query);
 const Title = 'ehRadio';
+
+function sanitizeHost(inputHost) {
+  if (!inputHost || typeof inputHost !== 'string') return null;
+  const host = inputHost.trim().toLowerCase();
+  // Allow only local/same-network targets used by the device UI.
+  if (host === window.location.hostname.toLowerCase()) return host;
+  if (host === 'localhost') return host;
+  if (/^([a-z0-9-]+\.)*local$/.test(host)) return host; // mDNS style hostnames
+  // RFC1918 + loopback IPv4
+  if (/^(127)\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.test(host)) return host;
+  if (/^(10)\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.test(host)) return host;
+  if (/^(192)\.(168)\.(\d{1,3})\.(\d{1,3})$/.test(host)) return host;
+  if (/^(172)\.(1[6-9]|2\d|3[0-1])\.(\d{1,3})\.(\d{1,3})$/.test(host)) return host;
+  return null;
+}
+
 if(params.size>0){
-  if(params.has('host')) hostname=params.get('host');
+  if(params.has('host')) {
+    const safeHost = sanitizeHost(params.get('host'));
+    if (safeHost) hostname = safeHost;
+  }
 }
 var websocket;
 var wserrcnt = 0;
