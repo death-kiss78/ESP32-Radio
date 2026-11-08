@@ -391,17 +391,29 @@ function getSafeRedirectUrl(target){
     if(decodedPath.indexOf('..') !== -1) return null;
     if(!/^\/[a-z0-9/_\-.]*$/i.test(decodedPath)) return null;
 
-    // Allow only known playlist endpoints/files.
-    const isPlaylistPath =
+    // Allow only known playlist endpoints/files and canonicalize to server-chosen values.
+    const canonicalPath = decodedPath.toLowerCase();
+    const allowedPlaylistPaths = new Set([
+      '/playlist',
+      '/playlist.m3u',
+      '/playlist.m3u8',
+      '/playlist.json',
+      '/playlist.txt'
+    ]);
+    if (!allowedPlaylistPaths.has(canonicalPath)) return null;
+
+    // Do not forward attacker-controlled query/hash; use canonical same-origin URL only.
+    return new URL(canonicalPath, window.location.origin).toString();
       decodedPath === '/playlist' ||
       decodedPath === '/playlists' ||
       decodedPath.startsWith('/playlists/') ||
       /^\/playlist\.(m3u|m3u8|pls|txt)$/i.test(decodedPath) ||
       /^\/playlists\/[a-z0-9._-]+\.(m3u|m3u8|pls|txt)$/i.test(decodedPath);
 
-    if(!isPlaylistPath) return null;
+    if(!allowedPlaylistPaths.has(canonicalPath)) return null;
 
-    return parsed.toString();
+    // Do not forward attacker-controlled query/hash; use canonical same-origin URL only.
+    return new URL(canonicalPath, window.location.origin).toString();
   }catch(e){}
   return null;
 }
