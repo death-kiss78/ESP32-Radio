@@ -1,12 +1,30 @@
 // ===== PLAYER AND PLAYLIST EDITOR FUNCTIONALITY =====
 
 var hostname = window.location.hostname;
+function sanitizeRedirectHost(rawHost) {
+  if (!rawHost) return null;
+  const candidate = String(rawHost).trim();
+  try {
+    const u = new URL(`http://${candidate}`);
+    // Reject values that include path/query/credentials and ensure exact host input.
+    if (u.host !== candidate) return null;
+    const host = u.hostname.toLowerCase();
+    const ipv4Private = /^(10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3}|169\.254\.\d{1,3}\.\d{1,3})$/;
+    if (host === 'localhost' || host === window.location.hostname.toLowerCase() || host.endsWith('.local') || ipv4Private.test(host)) {
+      return u.host;
+    }
+  } catch (e) {}
+  return null;
+}
 var modesd = false;
 const query = window.location.search;
 const params = new URLSearchParams(query);
 const Title = 'ehRadio';
 if(params.size>0){
-  if(params.has('host')) hostname=params.get('host');
+  if(params.has('host')) {
+    const safeHost = sanitizeRedirectHost(params.get('host'));
+    if (safeHost) hostname = safeHost;
+  }
 }
 var websocket;
 var wserrcnt = 0;
