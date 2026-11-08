@@ -135,7 +135,7 @@ function checkOnlineUpdate(button) {
         // Prepare UI: hide form, show status and progress bar
         const status = getId('uploadstatus');
         
-        if(status) status.innerHTML = getId('check_online_update').value;
+        if (status) status.textContent = getId('check_online_update').value;
 
         getId("uploadstatus").innerHTML = t('lbl_starting_online_update', 'Starting online update...');
         getId('updateform').classList.add('hidden');
