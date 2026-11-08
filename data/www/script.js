@@ -326,7 +326,13 @@ function onMessage(event) {
     }else{
       if(typeof data.current !== 'undefined') { setCurrentItem(data.current); return; }
         if(typeof data.file !== 'undefined') {
-          generatePlaylist(data.file+"?"+new Date().getTime());
+          const candidate = data.file + "?" + new Date().getTime();
+          const safePlaylistUrl = getSafeRedirectUrl(candidate);
+          if (safePlaylistUrl) {
+            generatePlaylist(safePlaylistUrl);
+          } else {
+            handlePlaylistData(null);
+          }
           websocket.send('submitplaylistdone=1');
           websocket.send('getindex=1');
           return;
@@ -560,12 +566,20 @@ function setModeSwitching(on){
   _switchTimer = window.setTimeout(function(){
     _switchTimer = null;
     setModeSwitching(false);
-    generatePlaylist(`http://${hostname}/data/playlist.csv`+"?"+new Date().getTime());
+    const candidate = `http://${hostname}/data/playlist.csv`+"?"+new Date().getTime();
+    const safePlaylistUrl = getSafeRedirectUrl(candidate);
+    if (safePlaylistUrl) generatePlaylist(safePlaylistUrl);
+    else handlePlaylistData(null);
   }, SWITCH_BACKSTOP_MS);
 }
 
 function generatePlaylist(path){
   getId('playlist').innerHTML='<div class="plloader"><span class="loader"></span></div>';
+  const safePath = getSafeRedirectUrl(path);
+  if (!safePath) {
+    handlePlaylistData(null);
+    return;
+  }
   var xhr = new XMLHttpRequest();
   xhr.onreadystatechange = function() {
     if (xhr.readyState == 4) {
@@ -576,7 +590,7 @@ function generatePlaylist(path){
       }
     }
   };
-  xhr.open("GET", path);
+  xhr.open("GET", safePath);
   xhr.send(null);
 }
 function uncheckSelectAll(){
