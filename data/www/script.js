@@ -369,8 +369,8 @@ function escapeData(data){
   let m=data.match(/{.+?:\s"(.+?)"}/);
   if(m!==null){
     let m1 = m[1];
-    if(m1.indexOf('"') !== -1){
-      let mq=m1.replace(/["]/g, '\\\"');
+    if(m1.indexOf('"') !== -1 || m1.indexOf('\\') !== -1){
+      let mq=m1.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
       return data.replace(m1,mq);
     }
   }
