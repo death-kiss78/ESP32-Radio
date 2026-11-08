@@ -380,9 +380,20 @@ function getSafeRedirectUrl(target){
   if(typeof target !== 'string' || target.trim() === '') return null;
   try{
     const parsed = new URL(target, window.location.origin);
-    if((parsed.protocol === 'http:' || parsed.protocol === 'https:') && parsed.origin === window.location.origin){
-      return parsed.href;
-    }
+    if(!((parsed.protocol === 'http:' || parsed.protocol === 'https:') && parsed.origin === window.location.origin)) return null;
+
+    const decodedPath = decodeURIComponent(parsed.pathname || '');
+    // Reject traversal (raw or encoded) and non-playlist endpoints.
+    if(decodedPath.indexOf('..') !== -1) return null;
+
+    const isPlaylistPath =
+      decodedPath.startsWith('/playlist') ||
+      decodedPath.startsWith('/playlists') ||
+      /\.(m3u|m3u8|pls|txt)$/i.test(decodedPath);
+
+    if(!isPlaylistPath) return null;
+
+    return parsed.toString();
   }catch(e){}
   return null;
 }
