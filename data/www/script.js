@@ -599,6 +599,18 @@ function generatePlaylist(path){
     handlePlaylistData(null);
     return;
   }
+  let requestPath = null;
+  try {
+    const parsedSafe = new URL(safePath, window.location.origin);
+    if (parsedSafe.origin !== window.location.origin) {
+      handlePlaylistData(null);
+      return;
+    }
+    requestPath = parsedSafe.pathname + parsedSafe.search;
+  } catch (e) {
+    handlePlaylistData(null);
+    return;
+  }
   var xhr = new XMLHttpRequest();
   xhr.onreadystatechange = function() {
     if (xhr.readyState == 4) {
@@ -609,7 +621,7 @@ function generatePlaylist(path){
       }
     }
   };
-  xhr.open("GET", safePath);
+  xhr.open("GET", requestPath);
   xhr.send(null);
 }
 function uncheckSelectAll(){
