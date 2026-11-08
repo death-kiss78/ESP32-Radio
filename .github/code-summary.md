@@ -50,6 +50,8 @@ is defined. They share their defect classes, and the same bug has repeatedly app
 
 ### Build-time chain
 - `platformio.ini` selects environment, included libraries, and included source files.
+- The root project uses its maintained ESPFileUpdater copy from `lib/ESPFileUpdater`; keep its HTTP request timeout
+  separate from the library's readiness timeout.
 - `myoptions.h` selects hardware profile + defaults.
 - `src/core/options.h` resolves all defaults/fallbacks and feature flags.
 - `.github/workflows/build-release-firmware.yml` verifies generated contributor release artifacts by re-running
@@ -778,6 +780,8 @@ All modules in `src/core/` follow the **class + global instance** pattern:
   - version-file parsing for online-update detection
   - startup background update scheduling (`startupServicesAsync`) — spawned as a FreeRTOS task on `NETWORK_CORE` at low
     priority:
+    - its ESPFileUpdater uses a 20-second HTTP connection/response timeout; the library readiness timeout remains
+      independent
     - starts immediately once the card is free (there is no pre-delay any more - see `BOOT_STABLE_TIME`'s note in `options.h`)
     - verifies WebUI locale JSON file; downloads if missing
     - checks for new firmware version via `new_ver.txt`; triggers OTA if `autoupdate` is enabled
@@ -5850,5 +5854,3 @@ by the shared HTTP/MQTT/Telnet non-WebUI policy.
 ---
 
 > Tracked issues and risk notes are in `.github/code-issues.md`.
-
-

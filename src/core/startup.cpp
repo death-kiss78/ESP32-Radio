@@ -533,6 +533,7 @@ void Startup::startupServices() {
 
     ESPFileUpdater* updater = new ESPFileUpdater(LittleFS);
     updater->setMaxSize(1024);
+    updater->setHttpTimeout(20000);
     updater->setUserAgent(ESPFILEUPDATER_USERAGENT);
     _services = SVC_WILL_RUN;
     xTaskCreatePinnedToCore(Startup::startupServicesAsync, "startupServicesAsync",

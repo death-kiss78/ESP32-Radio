@@ -3,3 +3,5 @@
 /platformio.ini
 /myoptions.h
 *.lck
+*._bk
+/plan
