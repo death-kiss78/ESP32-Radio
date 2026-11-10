@@ -5,3 +5,4 @@
 *.lck
 *._bk
 /plans
+/.build_all/

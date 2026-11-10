@@ -93,7 +93,8 @@ void Config::init() {
     SPIB.begin(SPIB_SCK, SPIB_MISO, SPIB_MOSI);
   #endif
   store.play_mode = store.play_mode & 0b11;
-  if (store.play_mode>1) store.play_mode=PM_WEB;
+  if (store.play_mode>1) store.play_mode = PM_WEB;
+  _sdOfflineSession = store.SDoffline;  // the one-shot reboot flag, read before setup() clears it
   CONFIGTIMELOG("RTC & SPI.begin & play_mode");
   _initHW();
   CONFIGTIMELOG("_initHW");
@@ -167,7 +168,6 @@ void Config::changeMode(int newmode) {
       FUNCTIONLOG("REBOOT", "Marking NVS Pref keys for intentional reboot to SD Offline mode. Rebooting.");
       saveValue(&store.bootStableMarker, true);
       saveValue(&store.SDoffline, true);
-      saveValue(&store.play_mode, static_cast<uint8_t>(PM_SDCARD));
       display.putRequest(NEWMODE, CLEAR);
       delay(100);
       ESP.restart();
@@ -251,6 +251,11 @@ void Config::syncSDFS() {
   #ifdef USE_SD
     _SDplaylistFS = (getMode()==PM_SDCARD) ? (FS*)&sdman : (FS*)&LittleFS;
   #endif
+}
+
+void Config::beginOfflineSdSession() {
+  _sdOfflineSession = true;
+  syncSDFS();  // SDPLFS() has to answer &sdman from here on
 }
 
 // The "there is nothing to play" state, in one place.  The placeholder name is what the meta line shows
@@ -344,7 +349,7 @@ void Config::initPlaylistMode() {
             strncpy(config.station.name, "ehRadio", STATION_FIELD_LENGTH);
             return;  // no SD — nothing more to init
           } else {
-            store.play_mode=PM_WEB;
+            store.play_mode = PM_WEB;
             WARNINGLOG("SD card not inserted.");
             changeMode(PM_WEB);
             _lastStation = store.lastStation;
@@ -357,7 +362,7 @@ void Config::initPlaylistMode() {
           strncpy(config.station.name, "ehRadio", STATION_FIELD_LENGTH);
           return;  // no SD — nothing more to init
         } else {
-          store.play_mode=PM_WEB;
+          store.play_mode = PM_WEB;
           ERRORLOG("SD mount failed");
           changeMode(PM_WEB);
           _lastStation = store.lastStation;
@@ -377,7 +382,7 @@ void Config::initPlaylistMode() {
       _lastStation = store.lastStation;
     }
   #else
-    store.play_mode=PM_WEB;
+    store.play_mode = PM_WEB;
     _lastStation = store.lastStation;
   #endif //ifdef USE_SD
   CONFIGTIMELOG("SD/WEB mode branch");
@@ -412,7 +417,8 @@ void Config::initPlaylistMode() {
   }
   CONFIGTIMELOG("Station validation & findStationByUrl");
   lastStation(_lastStation);
-  saveValue(&store.play_mode, store.play_mode);
+  // SD Offline Mode is a session, so the stored mode is left alone.
+  if (!_sdOfflineSession) saveValue(&store.play_mode, store.play_mode);
   CONFIGTIMELOG("lastStation & saveValue");
   _bootDone = true;
   // Ask the only question that matters: is there a station we can actually load?  A count cannot answer it -

@@ -35,72 +35,72 @@ ehRadio inherits a lot from ёRadio, but improvements have been made to make it 
 
 ### Features For Users
 
-- Uses ёRadio input control architecture
-  - up to 2 rotaries and 6 buttons
-  - touchscreen control (basic swipes and taps)
-  - IR remote control
+  - Uses ёRadio input control architecture
+    - up to 2 rotaries and 6 buttons
+    - touchscreen control (basic swipes and taps)
+    - IR remote control
 
-- Display Options Changeable While Running
-  - 37 locales available
-    - Matrix fonts contain most Latin / Cyrillic characters
-    - other fonts will fallback to available characters
-  - system font
-  - clock font
-  - themes
-  - screen layout
-  - VU type
+  - Display Options Changeable While Running
+    - 37 locales available
+      - Matrix fonts contain most Latin / Cyrillic characters
+      - other fonts will fallback to available characters
+    - system font
+    - clock font
+    - themes
+    - screen layout
+    - VU type
 
-- Mobile-first WebUI design
-  - 50 locales available
-  - WebUI easily accessed using [ehDP](https://github.com/trip5/eh-Device-Scanner)
-  - radio station streams can be explored using [Radio-browser](https://www.radio-browser.info/) API search
-  - playlists can be edited, imported, exported to files
-  - playlists can be imported, merged, and shared via [webstations](https://github.com/trip5/webstations) curated lists
-  - upload files directly using the SD Card Manager
-  - WebUI themes match display themes
+  - Mobile-first WebUI design
+    - 50 locales available
+    - WebUI easily accessed using [ehDP](https://github.com/trip5/eh-Device-Scanner)
+    - radio station streams can be explored using [Radio-browser](https://www.radio-browser.info/) API search
+    - playlists can be edited, imported, exported to files
+    - playlists can be imported, merged, and shared via [webstations](https://github.com/trip5/webstations) curated lists
+    - upload files directly using the SD Card Manager
+    - WebUI themes match display themes
 
-- [Web flasher](https://death-kiss78.github.io/ESP32-Radio/flasher.html) & Internet OTA updates
-  - make getting a new version easy-peasy
-  - *caveat:* your build must be in the `builds` folder of this repository
-
-- MQTT, Telnet, HTTP
-  - almost all WebUI [commands](Commands.md) are available
-  - with MQTT, Home Assistant integration is possible, too
+  - [Web flasher](https://trip5.github.io/ehRadio/flasher.html) & Internet OTA updates
+    - make getting a new version easy-peasy
+    - *caveat:* your build must be in the `builds` folder of this repository
 
 ### Features For Builders
 
-- Development is primarily focused on ESP32-S3
-  - 8MB flash recommended (4MB possible but will break features)
-  - PSRAM is required - a board without it will not build
-  - ESP-WROVER with PSRAM likely supported but untested
+  - Development is primarily focused on ESP32-S3
+    - 8MB flash recommended (4MB possible but will break features)
+    - PSRAM is required - a board without it will not build
+    - ESP-WROVER with PSRAM likely supported but untested
 
-- Multiple decoders supported
-  - I2S DAC Modules are recommended and well-supported
-    - PCM5102
-    - UDA1334
-    - MAX98357A
-    - ES8311 (mono)
-  - VS1053 updated and well-supported
+  - Multiple decoders supported
+    - I2S DAC Modules are recommended and well-supported
+      - PCM5102
+      - UDA1334
+      - MAX98357A
+      - ES8311 (mono)
+    - VS1053 updated and well-supported
 
-- Display architecture based on ёRadio
-  - simplified and expanded
-  - multiple themes and layouts compiled-in
-  - tools in codebase to edit/import themes and layouts
+  - Display architecture based on ёRadio
+    - simplified and expanded
+    - multiple themes and layouts compiled-in
+    - tools in codebase to edit/import themes and layouts
 
-- SPI architecture supports non-standard pins
-  - uses custom-named buses `SPIA` and `SPIB` defined in `myoptions.h`
-  - recommended to use default pins wherever possible
+  - SPI architecture supports non-standard pins
+    - uses custom-named buses `SPIA` and `SPIB` defined in `myoptions.h`
+    - recommended to use default pins wherever possible
 
-- System and user default settings can be set in `myoptions.h`
-  - still changeable in WebUI
+  - System and user default settings can be set in `myoptions.h`
+    - still changeable in WebUI
 
 ### Features For Tinkerers
 
-- Many tools are included in the codebase to edit:
-  - layouts (on a live display)
-  - themes (both display and WebUI)
-  - fonts (both system and clock)
-  - translations
+  - Commands can be sent over MQTT, Telnet, and HTTP
+    - almost all WebUI [commands](Commands.md) are available
+    - with MQTT, Home Assistant integration is possible, too
+
+  - Many tools are included in the codebase to edit:
+    - layouts (on a live display)
+    - themes (both display and WebUI)
+    - fonts (both system and clock)
+    - translations
 
 ---
 
@@ -108,7 +108,7 @@ ehRadio inherits a lot from ёRadio, but improvements have been made to make it 
 
 The WebUI is optimized for mobile browsers but looks great on PCs, too.
 
-<img src="images/Screenshot_Player.jpg" width="33%">
+<img src="images/Screenshot_Player_Web.jpg" width="33%">
 
 More screenshots from the WebUI are [here](WebUI.md).
 
@@ -197,9 +197,11 @@ Most displays will show an icon next to the IP address to show which mode the pl
 
 **SD Mode** <img src="images/Icon_SD.png">
 
+Since the IP is only shown when the WebUI is available, the mode icon will appear alone for a bit.
+
 ## Boot Mode Icons 
 
-As part of the boot animation, an icon will appear to reflect certain boot modes.
+As part of the boot animation, an icon will appear on the right of the loading animation to reflect the boot modes.
 
 ### Smart Start <img src="images/Icon_Play.png">
 
@@ -222,12 +224,14 @@ An RTC module is required for the time to be displayed in this mode.
 Otherwise, the clock will not be shown.
 
 Most settings, as set in the WebUI, are preserved in this mode.
-These are disabled: Safe mode, Deep Sleep, Mode switch.
+
+These functions are disabled: Safe mode, Deep Sleep, Mode switch.
 
 SD Shuffle (which makes the "previous" button do nothing) will be read from preferences and changeable using Mode switch (the mode button or double-click of a rotary encoder).
 It is not saved to preferences in this mode.  All other buttons will have expected behaviour.
 
 Exit this mode (and reboot with network functionality) by powering off and powering on again.
+Your radio will boot into whatever mode it did before.
 
 ---
 
@@ -382,7 +386,7 @@ For that and other major needed changes to the codebase, there is a `code-issues
 
 | Date       | Release Notes    |
 | ---------- | ---------------- |
-| 2026.11.09 | ***Breaking changes*** LittleFS (not SPIFFS), SD File Manager (and fixes to SD Mode), SDMMC, Playlist Validator, major work on layouts, screen fonts, themes, and VU (for all displays & changeable while running, theme/layout editor added), screensaver VU & info text, fixes to: SSD1322 & SSD1327 & NV3007 added (thanks kle7rx!), `ROTATE_90` for square displays, WebUI updates, IR code overhauled (mute/power added), recovery from network stack crashes and Wi-fi and stream reconnects, library change: `elims/PsychicMqttClient` & MQTT/HA improved, LCD displays removed, HLS AAC streams fixed, icons increased resolution, many patches to the audio libraries, boot time shorter |
+| 2026.11.09 | ***Breaking changes*** LittleFS (not SPIFFS), SD File Manager (and fixes to SD Mode), SDMMC, Playlist Validator, major work on layouts & screen fonts & themes & VU (for all displays & changeable while running, theme/layout editor added), screensaver VU & info text, fixes to: SSD1322 & SSD1327 & NV3007 added (thanks kle7rx!), `ROTATE_90` for square displays, WebUI (options added, fixed for Firefox), IR (mute/power added), recovery from network stack crashes and Wi-fi and stream reconnects, library change: `elims/PsychicMqttClient` & MQTT/HA improved, LCD displays removed, HLS AAC streams fixed, icons prettier, many patches to the audio libraries, boot time shorter |
 | 2026.08.19 | Stability and bug fixes (SD Offline), documentation |
 | 2026.08.13 | Memory usage, stability, and bug fixes (especially to SD, VS1053) |
 | 2026.08.03 | Minor fixes (and whoops) fixed Search and Curated |
@@ -415,9 +419,14 @@ For that and other major needed changes to the codebase, there is a `code-issues
 | 2025.07.23 | more options in WebUI |
 | 2025.07.19 | PR to ёRadio v0.9.533: EEProm storage changed to Preferences, fixes for screens that can't display certain characters, ESPFileUpdater added (updates timezones and Radio Browser servers), proper timezones, many macros added to `myoptions.h`, Radio station search, Playback queue now RTOS background task, improved JSON and CSV file importing, maleksm's backlightdown and decoder improvements, ESP8266 support removed |
 
+### Old Readme
+
+A full history of ёRadio from v0.4.177 to v0.9.533 can be seen in the [old Readme](README.old.md).
+
 ### Credit
 
 Thanks to:
+
   - [death-kiss78](https://github.com/death-kiss78) - `ro_RO` & `it_IT` translations, SDMMC testing, initiated SD File Manager, inspired screensaver info text & screensaver sleep, sleep command fixes
   - [kle7rx](https://github.com/kle7rx) - `ru_RU` translation, debugging, mute functionality, VS1053/I2S fixing, amplifier schematics, SSD1327 fixes, SD1322 fixes, NV3007 support, OLED128x64 Minimal & Compact layouts, Default layouts for OLED256x64 & TFT428x142
   - [Kasperaitis](https://github.com/kasperaitis) - `lt_LT` translation, initiating locales, battery support and widget, and a bunch of work for ES3C28P (including ES8311 decoder, FT6336 touchscreen)

@@ -62,7 +62,7 @@ Too many displays are supported to show pictures of them all here.
 
 ### TFT / IPS Color Displays
 
-SPI color TFT displays all look pretty good (IPS versions will always look better even if they don't photograph well).
+SPI color TFT displays all look pretty good (IPS versions will always look better), with varying degrees of color-accuracy.
 
 | Display | Default Resolution | Other Resolutions Supported | Note |
 | ------- | ------------------ | --------------------------- | ---- |
@@ -70,8 +70,9 @@ SPI color TFT displays all look pretty good (IPS versions will always look bette
 | GC9106  | 160x80             | No                          |      |
 | ILI9225 | 220x176            | Yes                         |      |
 | ILI9341 | 320x240            | No                          |      |
-| ILI9488 | 480x320            | Yes                         | uses a 24-bit bus so can be slow to update (choose the ST7796 if you want a display that updates faster) |
+| ILI9488 | 480x320            | Yes                         | uses a 24-bit bus so can be slow to update (choose the ST7796 if you want a big display with a better refresh rate) |
 | ILI9486 | 480x320            | Yes                         | not fully tested - see notes inside the library regarding gamma correction |
+| NV3007  | 428x142            | No                          |      |
 | ST7735  | 160x128            | * see below *               | works well, cheap |
 | ST7789  | 320x240            | Yes                         |      |
 | ST7796  | 480x320            | Yes                         |      |
@@ -83,31 +84,45 @@ The ST7735 has several subtypes in the Adafruit driver, as specified by `DTYPE`,
 
 | ST7735 Subtype | Resolution | Note |
 | -------------- | ---------- | ---- |
-| BLACKTAB       | 160x128    | default unless DYTPE is specified |
-| GREENTAB       | 160x128    |      |
-| REDTAB         | 160x128    |      |
-| 144GREENTAB    | 128x128    |      |
-| MINI160x80     | 160x80     |      |
+| `BLACKTAB`     | 160x128    | default unless `DYTPE` is specified |
+| `GREENTAB`     | 160x128    |      |
+| `REDTAB`       | 160x128    |      |
+| `144GREENTAB`  | 128x128    |      |
+| `MINI160x80`   | 160x80     |      |
 
-If you have a `160x128` and the default `BLACKTAB` doesn't work, try `GREENTAB` and `REDTAB`.
+If you have a `160x128` and the default `BLACKTAB` doesn't work, try `GREENTAB` or `REDTAB`.
+
+#### NV3007
+
+![image](images/kle7rx_NV3007_ru.jpg)
+
+#### ST7796
+
+![image](images/kle7rx_ST7796_ru.jpg)
 
 ### Monochrome OLED Displays
 
-OLEDs are cheap, beautiful (in a retro way) and just as functional.
+OLEDs are cheap, beautiful (in a retro way) and just as functional. They are available in various tints: blue, white, yellow, and green.
 
-| Display | Interface  | Default Resolution |
-| ------- | ---------- | ------------------ |
-| SH1106  | SPI or I2C | 128x64 |
-| SH1107  | SPI or I2C | 128x64 |
-| SSD1305 | SPI or I2C | 128x64 |
-| SSD1306 | SPI or I2C | 128x64 |
-| SSD1322 | SPI only   | 256x64 |
-| SSD1327 | SPI or I2C | 128x64 |
+| Display | Interface  | Default Resolution | Note |
+| ------- | ---------- | ------------------ | ---- |
+| SH1106  | SPI or I2C | 128x64             |      |
+| SH1107  | SPI or I2C | 128x64             |      |
+| SSD1305 | SPI or I2C | 128x64             |      |
+| SSD1306 | SPI or I2C | 128x64             |      |
+| SSD1322 | SPI only   | 256x64             | Greyscale |
+| SSD1327 | SPI or I2C | 128x64             | Greyscale unsupported so treated as monochrome |
 
 All OLED displays support various resolutions: `256x64`, `128x128`, `128x64`, and `128x32`.
 Non-default width or height must be specified in `myoptions.h`.
 
-Note that the SSD1322 is actually greyscale.
+#### SSD1327
+
+![image](images/kle7rx_SSD1327_ru.jpg)
+
+#### SSD1322 (Greyscale)
+
+![image](images/kle7rx_SSD1322xx_ru.jpg)
 
 ---
 
@@ -203,7 +218,7 @@ There are various fixes available and it's up to you to see which one works for 
 
   - Some people report that reflowing the connections on the VS1053B chip fix their issues.
 
-  - Here is a fix that worked for death-kiss78 (did not attempt the reflow, ):
+  - Here is a fix that worked for Trip5 (did not attempt the reflow, ):
   
     Attach 100KΩ resistors from the 3.3V LDO to `XCS` and `XDCS` to pull them up.
     If the error persists, restore R2 with a solder bridge.
@@ -291,7 +306,7 @@ What actually matters for amp compatibility is **impedance (Ω)**:
 
 For a desktop internet radio, efficient 3–10W speakers (4–8Ω) are ideal. They'll produce more volume at low power than massive high-wattage speakers whose heavy cones need serious current to move. Small bookshelf or full-range drivers work best with these amps.
 
-### death-kiss78's Lazy PCM/Amp Combo
+### Trip5's Lazy PCM/Amp Combo
 
 If you don't care about audio or power isolation, you can solder the PCM5102A to a PAM8406 stereo amp.
 The PCM5102 output pins line up pretty nicely to the PAM8406's input pins.
