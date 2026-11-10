@@ -23,7 +23,7 @@
   ],
   "filesystem": {
     "path": "../firmware/esp32_s3_n16r8_filesystem.bin",
-    "offset": 6750208,
-    "size": 1572864
+    "offset": 13172736,
+    "size": 3538944
   }
 }
