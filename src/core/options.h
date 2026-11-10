@@ -2,7 +2,7 @@
 #define options_h
 #pragma once
 
-#define RADIOVERSION "2026.11.07"
+#define RADIOVERSION "2026.11.10"
 
 /*******************************************************
  

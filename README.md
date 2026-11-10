@@ -59,7 +59,7 @@ ehRadio inherits a lot from ёRadio, but improvements have been made to make it 
     - upload files directly using the SD Card Manager
     - WebUI themes match display themes
 
-  - [Web flasher](https://trip5.github.io/ehRadio/flasher.html) & Internet OTA updates
+  - [Web flasher](https://death-kiss78.github.io/ESP32-Radio/flasher.html) & Internet OTA updates
     - make getting a new version easy-peasy
     - *caveat:* your build must be in the `builds` folder of this repository
 
@@ -274,7 +274,7 @@ Note that if following this path, you don't necessarily to attach all peripheral
 The radio needs only the ESP board and the audio decoder to function... although your WebUI may show links to peripherals that don't exist.
 
 If you don't want to mess around with VS Code but would still like your own build added to the Releases, you can make a
-[firmware request](https://github.com/trip5/ehRadio/discussions/categories/firmware-requests).
+[firmware request](https://death-kiss78.github.io/ESP32-Radio/discussions/categories/firmware-requests).
 Please also do some research before requesting a firmware.
 
 ### Trip5's Radios
