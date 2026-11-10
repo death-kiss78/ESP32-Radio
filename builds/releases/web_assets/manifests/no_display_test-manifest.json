@@ -1,6 +1,6 @@
 {
   "name": "ehRadio - No Display",
-  "version": "2026.11.09",
+  "version": "2026.11.07",
   "funding_url": "https://github.com/sponsors/trip5",
   "builds": [
     {
@@ -23,7 +23,7 @@
   ],
   "filesystem": {
     "path": "../firmware/esp32_s3_n16r8_filesystem.bin",
-    "offset": 13172736,
-    "size": 3538944
+    "offset": 6750208,
+    "size": 1572864
   }
 }

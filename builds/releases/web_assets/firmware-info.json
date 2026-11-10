@@ -1,16 +1,11 @@
 {
   "project": "ehRadio",
-  "version": "2026.11.09",
+  "version": "2026.11.07",
   "variants": [
     {
       "name": "Death-Kiss78 es3c28s",
       "manifest": "manifests/death-kiss78_es3c28s-manifest.json",
       "description": "ehRadio - death-kiss78_es3c28s"
-    },
-    {
-      "name": "Kasperaitis es3c28p",
-      "manifest": "manifests/kasperaitis_es3c28p-manifest.json",
-      "description": "ehRadio - kasperaitis_es3c28p"
     },
     {
       "name": "No Display No Display",
