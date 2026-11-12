@@ -95,7 +95,7 @@ select{background:#272727; color:#eecccc; padding:4px 8px; font-size:16px; borde
 </div>
 </section>
 <p><a href="/emergency" data-i18n="z_emergency_firmware_uploader">Emergency Firmware Uploader</a></p>
-<div id="copy">powered by <a target="_blank" href="https://trip5.github.io/ehRadio/">ehRadio</a> | <span id="version"></span></div>
+      <div id="copy"><a target="_blank" href="https://death-kiss78.github.io/ESP32-Radio/"><b>ESP32-Radio</b></a> <b>v.</b> <span id="version"></span></div>
 </body>
 <script>
 document.wifiform.action = `/${formAction}`;
