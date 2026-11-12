@@ -9,6 +9,7 @@
 #include <stdarg.h>
 #include <driver/rtc_io.h>
 #include "backlightcontrols.h"
+#include "controls.h"
 #include "config.h"
 #include "display.h"
 #include "netserver.h"
@@ -91,19 +92,28 @@ void Utility::sleepCore() {
 }
 
 volatile uint8_t Utility::sleepWanted = 0;
+volatile uint8_t Utility::stopTimerWanted = 0;
 
-// Both of these are called from an esp_timer task, never from the main loop: `ticks()` is a Ticker callback
-// (`network.ctimer.attach(1, ticks)`) and so is the sleep timer that sleepForAfter() arms.  So they do the one thing that
-// is safe from any task - raise a flag - and the sleep itself happens in serviceSleep() below, on the main loop.
+// Timer callbacks only raise flags; their actions are serviced on the main loop.
 void Utility::requestSleep()     { sleepWanted = 1; }  // sleep now, no wake timer
 void Utility::requestSleepWake() { sleepWanted = 2; }  // sleep, then wake after `sleepfor` minutes
+void Utility::requestStopTimer() { stopTimerWanted = 1; }
 
-// Main loop: carry out a sleep that a timer, a button or the `sleep` command asked for.  Two phases, because the request
-// and the teardown used to happen in the same instant: display.putRequest(NEWMODE, SLEEPING) is queued to the display
-// task, while sleepCore() calls display.deepsleep() microseconds later - so the message was never painted, and the timer
-// paths never asked for one at all.  Phase A wakes a blanked panel, requests the message and arms SLEEP_MSG_HOLD; phase B
-// does the teardown once the hold has expired.  Deliberately non-blocking: the display task needs those seconds to draw,
-// and the audio task keeps feeding through them.
+void Utility::serviceStopTimer() {
+  if (!stopTimerWanted) return;
+  stopTimerWanted = 0;
+  const uint32_t stopTimerSeconds = (uint32_t)config.store.sleepSsTimeout * 60;
+  if (!config.store.sleeptimer || config.stopTimerTicks < stopTimerSeconds) return;
+  config.saveValue(&config.store.sleeptimer, false);
+  netserver.requestOnChange(GETSCREENSAVER, 0);
+  if (player.isRunning()) {
+    network.cancelStreamRetry();
+    controls.screenSaverExit();
+    player.sendCommand({PR_STOP, 0});
+  }
+}
+
+// Main loop: show the sleep message before tearing down the display and audio.
 void Utility::serviceSleep() {
   static uint32_t sleepAtMs = 0;
   static bool     holding   = false;

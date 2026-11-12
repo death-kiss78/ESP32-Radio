@@ -542,7 +542,7 @@ void Config::defaultSettings(const char *val, uint8_t clientId) {
     saveValue(&store.screensaverVUpeak, (bool)SS_VUPEAK);
     saveValue(&store.sleeptimer, (bool)SS_SLEEPTIMER);
     saveValue(&store.sleepSsTimeout, (uint16_t)SS_SLEEPTIME);
-    sleepTicks = 0;
+    stopTimerTicks = 0;
     if (isScreensaver) {
       const bool blank = player.isRunning() ? store.screensaverPlayingBlank : store.screensaverBlank;
       display.putRequest(SSREBUILD, blank ? SCREENBLANK : SCREENSAVER);
@@ -788,11 +788,10 @@ uint8_t Config::irAction(uint8_t button) {
 }
 #endif // IR_PIN!=255
 
-// The screensaver and sleep countdowns always restart together
+// The screensaver countdowns always restart together
 void Config::resetScreensaverTimers(uint16_t value) {
   screensaverTicks = value;
   screensaverPlayingTicks = value;
-  sleepTicks = value;
 }
 
 void Config::processDeferredSaves() {
@@ -1189,4 +1188,3 @@ void Config::deleteOldKeys() {
   prefs.remove("dspon"); // should never have been / it's a runtime-only state
   // none yet
 }
-

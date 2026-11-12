@@ -360,11 +360,8 @@ void loop() {
     filemanager.loop();
   #endif
 
-  /* A sleep the timers asked for is performed HERE, on the main loop.  Both requesters (the sleep timer in ticks() and
-     the Ticker armed by sleepForAfter()) are esp_timer callbacks, and display.deepsleep() plus a telnet-capable log line
-     do not belong on that task. */
+  // Timer callbacks only raise flags; dispatch Stop Timer and deep-sleep actions on the main loop.
+  utility.serviceStopTimer();
   utility.serviceSleep();
   coredump::service();   // black box: archive the previous boot's crash once the clock can date it
 }
-
-

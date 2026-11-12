@@ -304,7 +304,7 @@ class Config {
     uint32_t          _vuRefMs = 0;              // the reference's release clock; see vuRefTrack()
     volatile uint16_t screensaverTicks = 0;
     volatile uint16_t screensaverPlayingTicks = 0;
-    volatile uint16_t sleepTicks = 0;   // seconds the screensaver has been up, for the sleep timer
+    volatile uint32_t stopTimerTicks = 0;
     volatile bool     isScreensaver = false;
     volatile bool     displayIsInverted = false;
     volatile int      newConfigMode = 0;

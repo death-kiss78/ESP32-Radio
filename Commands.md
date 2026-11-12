@@ -29,7 +29,7 @@ Order and sections match that file.
 | `start` | Start playback from last station. |
 | `stop` | Stop playback. |
 | `plvalidate` | Start (`1`) or stop (`0`) the playlist Validator sweep. Blocked in HTTP/MQTT/Telnet. |
-| `sleep` | Set sleep timer using for,after values (may be disabled by build) |
+| `sleep` | Enter deep sleep immediately or schedule it using for,after values (may be disabled by build). |
 | `mode` | Change playback mode: `0` = Radio/Web, `1` = SD card, out-of-range values cycle modes (`2` cycles in Telnet). |
 | `submitplaylist` | Stop playback before playlist submit flow. |
 | `submitplaylistdone` | Finalize playlist submit flow, reload best station target, and trigger MQTT playlist sync. |
@@ -119,8 +119,8 @@ different pictures, so nothing keeps them in step.
 | `screensavervu` | Draw the VU full screen as the screensaver instead of the moving clock. |
 | `screensavervustyle` | Select the style that full-screen meter draws (numeric, 0-based, clamped to the known range, same as `vustyle`). |
 | `screensavervupeak` | Show/hide the peak markers and the axis or reference lines on that full-screen meter (independent of `vupeaks`). |
-| `sleeptimerenable` | Enable/disable the deep-sleep timer. Saved, and the sleep countdown restarts. |
-| `sleeptimeout` | Set the deep-sleep timeout in minutes (5..1080), counted from the same idle point as the screensaver timeout. Not available if `DEEP_SLEEP_DISABLE` is in `myoptions.h` or no wake pins are configured. |
+| `sleeptimerenable` | Enable/disable the one-shot Stop Timer. Saved, and the elapsed countdown restarts. |
+| `sleeptimeout` | Set the Stop Timer timeout in minutes (1..1080). The countdown runs continuously from enable/timeout changes; at expiry it sends `stop` only if playback is active, then disables itself. |
 
 ## Options: Locale
 
