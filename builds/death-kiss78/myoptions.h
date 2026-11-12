@@ -111,7 +111,7 @@
 #define DSP_LOCALE           "ro_RO"
 #define TIMEZONE_NAME        "Europe/Rome"
 #define TIMEZONE_POSIX       "CET-1CEST,M3.5.0,M10.5.0/3"
-#define MDNS_HOST            "av3ntura" /* Hostname without the .local suffix. If left blank, the firmware uses the chip ID. */
+#define MDNS_HOST            "my_radio" /* Hostname without the .local suffix. If left blank, the firmware uses the chip ID. */
 #define CLOCK_TWELVE         false
 #define NUMBERED_PLAYLIST    true
 #define ONE_CLICK_SWITCH     false
