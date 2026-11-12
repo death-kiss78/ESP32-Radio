@@ -48,7 +48,7 @@
   "lbl_update": "UPDATING",
   "lbl_sdman": "SD MANAGER",
   "lbl_validating": "VALIDATING",
-  "lbl_sleeping": "SLEEPING",
+  "lbl_sleeping": "HIBERNATE",
   "lbl_waitforsd": "INDEX SD",
   "lbl_ap_improv_mode": "AP/Improv Mode",
   "lbl_apname": "AP NAME",
