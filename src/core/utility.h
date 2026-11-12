@@ -129,6 +129,8 @@ public:
   void doSleepW();
   static void requestSleep();
   static void requestSleepWake();
+  static void requestStopTimer();
+  void serviceStopTimer();
   void serviceSleep();
   void sleepForAfter(uint16_t sleepfor, uint16_t sa = 0);
   void stopStandby();
@@ -142,6 +144,7 @@ public:
 private:
   static uint16_t sleepfor;
   static volatile uint8_t sleepWanted;   // 0 = none, 1 = doSleepW (no wake timer), 2 = doSleep (wake after sleepfor)
+  static volatile uint8_t stopTimerWanted;
   static void sleepCore();
   static void doSleep();
   char ipBuf[16] = {0};

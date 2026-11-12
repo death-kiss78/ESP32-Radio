@@ -1677,28 +1677,21 @@ thinks the radio forgot everything. The loader-side wait (`plans/network-recover
   `screensaverTicks`/`screensaverPlayingTicks`. The cost is the panel clear a rebuild goes through, one full
   blit of black before the rebuilt picture; that clear is what owns the whole panel when a box shrinks.
 - The Screensaver settings are their own reset category: `defaultSettings("screensaver")` holds every
-  `screensaver*` default plus the two deep-sleep settings, while `defaultSettings("screen")` keeps only the
+  `screensaver*` default plus the two Stop Timer settings, while `defaultSettings("screen")` keeps only the
   Screen ones. Both branches end with `GETACTIVE` for the layout-driven groups (`group_full_time`,
   `group_smaller`, `group_vu_ss_style`), which depend on Screensaver values too. The value payloads are
   separate - `GETSCREEN` for Screen and `GETSCREENSAVER` for Screensaver - so the all-reset order no longer
   decides which defaults the WebUI sees. The Screensaver branch queues an `SSREBUILD` while the device is
   asleep so the reset is visible at once.
-- **`sleeptimer` / `sleepSsTimeout`: a deep-sleep timer beside the screensaver timers.** `sleeptimerenable` and
-  `sleeptimeout` (5..1080 minutes) are the only screensaver commands that do not call `screensaverHelper()`,
-  because the picture does not change. `config.sleepTicks` is a third idle counter: `ticks()` increments it
-  while `store.sleeptimer` is true and the device is in `PLAYER` or the screensaver, and calls
-  `utility.doSleepW()` once it passes `sleepSsTimeout * 60 + SCREENSAVERSTARTUPDELAY`. It does not wait for a
-  screensaver to appear and neither screensaver enable switch gates it, so a 5-minute sleep timeout with a
-  120-minute screensaver timeout deep-sleeps first, while 30 against 5 deep-sleeps 30 minutes from the same
-  start rather than 35. The block is inside `#ifndef DEEP_SLEEP_DISABLE`, and `GETACTIVE` offers the rows
-  through `group_deepsleep` without looking at the screensaver switches. While `filemanager.active()` is true,
-  `ticks()` holds all three counters at 0 every second: SD File Manager mode has its own `SDMAN_AUTO_EXIT_MS`
-  timeout, and that exit is what lets the countdowns resume.
-- **All three idle counters reset together.** `Config::resetScreensaverTimers(value)` sets
-  `screensaverTicks`, `screensaverPlayingTicks` and `sleepTicks`; the six existing reset sites call it
-  (`ticks()` on a connecting stream, IR presses, `screenSaverExit()` and `touch()` with 0; `_switchMode()` and
-  a station start with `SCREENSAVERSTARTUPDELAY`). The two sleep commands still zero `sleepTicks`, so enabling
-  or changing the value starts a fresh countdown.
+- **`sleeptimer` / `sleepSsTimeout` drive the one-shot Stop Timer.** `sleeptimerenable` and `sleeptimeout`
+  (1..1080 minutes) configure a continuous countdown independent of playback, screensaver and SD File Manager
+  activity. Enabling or changing the timeout resets `config.stopTimerTicks`; the timer is available even when
+  deep sleep is disabled. `ticks()` only raises a request at expiry; the main loop disables and persists the
+  setting and refreshes `GETSCREENSAVER`. If playback is active then, it cancels stream retry, exits the
+  screensaver and queues `PR_STOP`; if not, later playback is unaffected. The separate `sleep` command continues
+  to use the deep-sleep path.
+- **Both screensaver idle counters reset together.** `Config::resetScreensaverTimers(value)` sets only
+  `screensaverTicks` and `screensaverPlayingTicks`; its existing reset sites remain independent of the Stop Timer.
 - Central command router for WS, URL params, MQTT, and telnet fallback paths.
 - Main responsibilities:
   - map `key=value` commands into config/player/display/network actions
@@ -2522,8 +2515,8 @@ thinks the radio forgot everything. The loader-side wait (`plans/network-recover
     `config.countStation`, `config.lastStation`, the `PR_PLAY` payload and the web/display station ids. **Widening
     deliberately deferred on 2026.10.25** - see `plans/shuffle-without-repeats.md`.
   - WiFi credential parse/save/import helpers
-  - deep-sleep entrypoints (`doSleepW`, `sleepForAfter`); `doSleepW()` is also reached from `ticks()`'s
-    deep-sleep timer (`sleeptimer` / `sleepSsTimeout`, 5..1080 minutes)
+  - deep-sleep entrypoints (`doSleepW`, `sleepForAfter`); `requestSleep()` is used by the manual deep-sleep actions
+  - Stop Timer request/service: the `ticks()` callback raises the expiry flag, and the main loop queues playback stop
   - standby helpers `stopStandby()`, `startStandby()` and `toggleStandby()` (shared by the `stopstandby`, `startstandby`
     and `togglestandby` commands and the IR power button); `startStandby()` also calls `network.cancelStreamRetry()`
   - LittleFS file-maintenance helpers shared with startup and WebUI update paths:
@@ -5977,5 +5970,3 @@ by the shared HTTP/MQTT/Telnet non-WebUI policy.
 ---
 
 > Tracked issues and risk notes are in `.github/code-issues.md`.
-
-

@@ -196,6 +196,13 @@ static void refreshClock() {
 
 void ticks() {
   if (!display.ready()) return; //waiting for SD is ready
+  if (config.store.sleeptimer) {
+    const uint32_t stopTimerSeconds = (uint32_t)config.store.sleepSsTimeout * 60;
+    if (config.stopTimerTicks < stopTimerSeconds) {
+      config.stopTimerTicks++;
+      if (config.stopTimerTicks >= stopTimerSeconds) utility.requestStopTimer();
+    }
+  }
   // Self-heal the ladder.  lostPlaying is the IOU ("the user is owed a resume"): it is set BEFORE the task is
   // created, and a create can fail on a fragmented heap, while a task can also end early and leave the flag
   // set (a WiFi loss mid-outage does exactly that).  Either way the arm gate in player.loop() stays closed and
@@ -284,7 +291,7 @@ void ticks() {
   #else
     const bool fileManagerActive = false;
   #endif
-  // The SD File Manager holds the screen and has its own idle timeout; hold the countdowns while it is open
+  // The SD File Manager holds the screen and has its own idle timeout; hold screensaver countdowns while it is open
   if (fileManagerActive || connectingStream) {
     config.resetScreensaverTimers(0);
   } else {
@@ -308,12 +315,6 @@ void ticks() {
         }
       }
     }
-    #ifndef DEEP_SLEEP_DISABLE
-      if (config.store.sleeptimer && (display.mode()==PLAYER || config.isScreensaver)) {
-        if (config.sleepTicks < 0xFFFF) config.sleepTicks++;
-        if (config.sleepTicks > (uint32_t)config.store.sleepSsTimeout * 60 + SCREENSAVERSTARTUPDELAY) utility.requestSleep();
-      }
-    #endif
   }
   refreshClock();
   if (player.isRunning() && config.getMode()==PM_SDCARD) {

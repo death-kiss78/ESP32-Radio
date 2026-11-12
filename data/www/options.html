@@ -56,73 +56,16 @@
           <div class="flex-row group_ir last hidden">
             <div class="fb local" data-command="setupir" data-i18n="ttl_ir_recorder">IR Recorder</div>
           </div>
-<div class="inputwrap center">
-  <form id="sleepform" method="GET" action="/"
-    onsubmit="
-      event.preventDefault();
-
-      const status = document.getElementById('sleepstatus');
-
-      fetch(this.action + '?' + new URLSearchParams(new FormData(this)))
-	  .then(() => {
-	  status.textContent = '✓ Comanda Sleep a fost trimisă către dispozitiv';
-	  status.style.color = '#4caf50';
-	  
-	  setTimeout(() => {
-	  status.textContent = '';
-	  }, 3000);
-	  })
-	  .catch(() => {
-	  status.textContent ='Comanda a fost trimisă. Dispozitivul poate fi deja în sleep.';
-	  status.style.color = '#ff9800';
-	  
-	  setTimeout(() => {
-	  status.textContent = '';
-	  }, 3000);
-	  });
-	  ">
-
-    <div class="row rowinput">
-      <label for="sleepduration" data-i18n="lbl_sleep_duration">
-        Sleep (minutes)
-      </label>
-
-      <input id="sleepduration"
-             type="number"
-             name="sleep"
-             min="0"
-             max="65535"
-             step="1"
-             value="0"
-             required>
-
-      <label for="sleepafter" data-i18n="lbl_sleep_after">
-        After (minutes)
-      </label>
-
-      <input id="sleepafter"
-             type="number"
-             name="after"
-             min="0"
-             max="65535"
-             step="1"
-             value="0"
-             required>
-    </div>
-
-    <div class="row rowinput inputwrap center">
-      <input type="submit"
-             class="fb"
-             value="Hibernate"
-             data-i18n="btn_sleep">
-    </div>
-
-    <div id="sleepstatus"
-         style="margin-top:10px;font-weight:bold;text-align:center;">
-    </div>
-
-  </form>
-</div>
+          <div class="flex-row">
+            <div class="inputwrap center">
+              <span class="inputtitle" data-i18n="lbl_stop_playing">Stop Playing</span>
+              <div class="checkbox ssoption" id="scrtimer" data-command="sleeptimerenable"><div class="knob"></div></div>
+            </div>
+            <div class="inputwrap center">
+              <span class="inputtitle" data-i18n="lbl_timeout_min">Timeout (min)</span>
+              <input type="number" id="scrtimeout" data-command="sleeptimeout" value="" maxlength="3" min="1" max="1080" />
+            </div>
+          </div>
 
         </section>
 
@@ -326,16 +269,79 @@
               </select>
             </div>
           </div>
-          <div class="row-title group_deepsleep hidden"><span data-i18n="ttl_deep_sleep">Deep Sleep</span></div>
+
+
+          <div class="row-title group_deepsleep hidden"><span data-i18n="ttl_deep_sleep">Hibernation</span></div>
           <div class="flex-row group_deepsleep hidden">
-            <div class="inputwrap center">
-              <span class="inputtitle" data-i18n="lbl_sleep_playing">Sleep Timer</span>
-              <div class="checkbox ssoption" id="scrtimer" data-command="sleeptimerenable"><div class="knob"></div></div>
-            </div>
-            <div class="inputwrap center">
-              <span class="inputtitle" data-i18n="lbl_timeout_min">Timeout (min)</span>
-              <input type="number" id="scrtimeout" data-command="sleeptimeout" value="" maxlength="3" min="5" max="1080" />
-            </div>
+
+<div class="inputwrap center">
+  <form id="sleepform" method="GET" action="/"
+    onsubmit="
+      event.preventDefault();
+
+      const status = document.getElementById('sleepstatus');
+
+      fetch(this.action + '?' + new URLSearchParams(new FormData(this)))
+	  .then(() => {
+	  status.textContent = '✓ Comanda Sleep a fost trimisă către dispozitiv';
+	  status.style.color = '#4caf50';
+	  
+	  setTimeout(() => {
+	  status.textContent = '';
+	  }, 3000);
+	  })
+	  .catch(() => {
+	  status.textContent ='Comanda a fost trimisă. Dispozitivul poate fi deja în sleep.';
+	  status.style.color = '#ff9800';
+	  
+	  setTimeout(() => {
+	  status.textContent = '';
+	  }, 3000);
+	  });
+	  ">
+
+    <div class="row rowinput">
+      <label for="sleepduration" data-i18n="lbl_sleep_duration">
+        Sleep (minutes)
+      </label>
+
+      <input id="sleepduration"
+             type="number"
+             name="sleep"
+             min="0"
+             max="65535"
+             step="1"
+             value="0"
+             required>
+
+      <label for="sleepafter" data-i18n="lbl_sleep_after">
+        After (minutes)
+      </label>
+
+      <input id="sleepafter"
+             type="number"
+             name="after"
+             min="0"
+             max="65535"
+             step="1"
+             value="0"
+             required>
+    </div>
+
+    <div class="row rowinput inputwrap center">
+      <input type="submit"
+             class="fb"
+             value="Hibernate"
+             data-i18n="btn_sleep">
+    </div>
+
+    <div id="sleepstatus"
+         style="margin-top:10px;font-weight:bold;text-align:center;">
+    </div>
+
+  </form>
+</div>
+
           </div>
         </section>
 
@@ -502,14 +508,14 @@
             <div class="inputwrap center">
               <span class="inputtitle">
                 <span data-i18n="lbl_wifi_scan">Scan for Best Wi-Fi on Boot</span>
-                [<a href="https://trip5.github.io/ehRadio/#scan-for-best-wi-fi-on-boot" target="_blank">?</a>]
+                [<a href="https://death-kiss78.github.io/ESP32-Radio/#scan-for-best-wi-fi-on-boot" target="_blank">?</a>]
               </span>
               <div class="checkbox" id="wifiscan" data-command="wifiscan"><div class="knob"></div></div>
             </div>
             <div class="inputwrap center">
               <span class="inputtitle">
                 <span data-i18n="lbl_eh_discovery">eh Discovery Protocol</span>
-                [<a href="https://trip5.github.io/ehRadio/#eh-discovery-protocol" target="_blank">?</a>]
+                [<a href="https://death-kiss78.github.io/ESP32-Radio/#eh-discovery-protocol" target="_blank">?</a>]
               </span>
               <div class="checkbox" id="ehdp" data-command="ehdp"><div class="knob"></div></div>
             </div>
