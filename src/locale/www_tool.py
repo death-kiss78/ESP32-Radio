@@ -65,7 +65,7 @@ EXAMPLES:
     py www_tool.py ru_RU --extract checknewkeys.txt
 
     # Redo one key everywhere, after its text in the page changed
-    py www_tool.py * --translate --fast --clean --sort --key msg_sd_manager_closed
+    python www_tool.py * --translate --fast --clean --sort --key msg_sd_manager_closed
 """
 
 import os
