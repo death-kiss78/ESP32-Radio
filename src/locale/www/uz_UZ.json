@@ -238,6 +238,8 @@
   "msg_search_no_servers": "Qidiruv muvaffaqiyatsiz tugadi. Hech qanday server mavjud emas. Keyinroq yana urinib ko'ring.",
   "msg_searchterm": "Qidiruv terminini kiriting",
   "msg_settings_saved": "Sozlamalar saqlandi. Qayta ishga tushirilmoqda...",
+  "msg_sleep_command_sent": "✓ Qurilmaga hibernatsiya buyrug'i yuborildi",
+  "msg_sleep_device_may_be_asleep": "Buyruq yuborildi. Qurilma allaqachon hibernatsiyada bo'lishi mumkin.",
   "msg_stations": "stansiyalar",
   "msg_system_ready": "Tizim tayyor, yuklanmoqda...",
   "msg_try_searching": "Qidirib ko'ring.",

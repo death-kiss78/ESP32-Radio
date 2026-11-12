@@ -238,6 +238,8 @@
   "msg_search_no_servers": "Suche fehlgeschlagen. Keine Server verfügbar. Versuchen Sie es später noch einmal.",
   "msg_searchterm": "Suchbegriff eingeben",
   "msg_settings_saved": "Einstellungen gespeichert. Neustart...",
+  "msg_sleep_command_sent": "✓ Befehl „Hibernate“ an das Gerät gesendet",
+  "msg_sleep_device_may_be_asleep": "Befehl gesendet. Das Gerät befindet sich möglicherweise bereits im Ruhezustand.",
   "msg_stations": "Sender",
   "msg_system_ready": "System bereit, Nachladen...",
   "msg_try_searching": "Versuchen Sie die Suche.",

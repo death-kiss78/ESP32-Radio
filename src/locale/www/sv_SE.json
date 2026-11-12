@@ -238,6 +238,8 @@
   "msg_search_no_servers": "Sökningen misslyckades. Inga servrar tillgängliga. Försök igen senare.",
   "msg_searchterm": "Ange sökterm",
   "msg_settings_saved": "Inställningar sparade. Startar om...",
+  "msg_sleep_command_sent": "✓ Kommandot ”Hibernate” har skickats till enheten",
+  "msg_sleep_device_may_be_asleep": "Kommandot har skickats. Enheten kan redan befinna sig i viloläge.",
   "msg_stations": "stationer",
   "msg_system_ready": "Systemet redo, laddar om...",
   "msg_try_searching": "Försök att söka.",

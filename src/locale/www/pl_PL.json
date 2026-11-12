@@ -238,6 +238,8 @@
   "msg_search_no_servers": "Wyszukiwanie nie powiodło się. Brak dostępnych serwerów. Spróbuj ponownie później.",
   "msg_searchterm": "Wpisz termin wyszukiwania",
   "msg_settings_saved": "Ustawienia zapisane. Restart...",
+  "msg_sleep_command_sent": "✓ Polecenie hibernacji wysłane do urządzenia",
+  "msg_sleep_device_may_be_asleep": "Polecenie wysłane. Urządzenie może już znajdować się w trybie hibernacji.",
   "msg_stations": "stacje",
   "msg_system_ready": "System gotowy, ładowanie...",
   "msg_try_searching": "Spróbuj wyszukać.",

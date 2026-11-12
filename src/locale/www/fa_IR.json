@@ -238,6 +238,8 @@
   "msg_search_no_servers": "جستجو ناموفق بود. هیچ سروری در دسترس نیست. بعداً دوباره تلاش کنید.",
   "msg_searchterm": "عبارت جستجو را وارد کنید",
   "msg_settings_saved": "تنظیمات ذخیره شد. راه‌اندازی مجدد...",
+  "msg_sleep_command_sent": "✓ فرمان Hibernate به دستگاه ارسال شد",
+  "msg_sleep_device_may_be_asleep": "فرمان ارسال شد. ممکن است دستگاه از قبل در حالت خواب زمستانی باشد.",
   "msg_stations": "ایستگاه",
   "msg_system_ready": "سیستم آماده است، در حال بارگذاری مجدد...",
   "msg_try_searching": "کمی جست‌وجو کن.",

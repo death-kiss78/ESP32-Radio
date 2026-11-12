@@ -238,6 +238,8 @@
   "msg_search_no_servers": "Paieška nepavyko. Nėra prieinamų serverių. Bandykite dar kartą vėliau.",
   "msg_searchterm": "Įveskite paieškos terminą",
   "msg_settings_saved": "Nustatymai išsaugoti. Perkraunama...",
+  "msg_sleep_command_sent": "✓ Įrenginiui išsiųsta „Hibernate“ komanda",
+  "msg_sleep_device_may_be_asleep": "Komanda išsiųsta. Įrenginys gali būti jau hibernacijos režime.",
   "msg_stations": "stotys",
   "msg_system_ready": "Sistema paruošta, perkraunama...",
   "msg_try_searching": "Pabandykite ieškoti.",

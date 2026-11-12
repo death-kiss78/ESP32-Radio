@@ -238,6 +238,8 @@
   "msg_search_no_servers": "Ricerca fallita. Nessun server disponibile. Riprova più tardi.",
   "msg_searchterm": "Inserisci il termine di ricerca",
   "msg_settings_saved": "Impostazioni salvate. Riavvio in corso...",
+  "msg_sleep_command_sent": "✓ Comando di ibernazione inviato al dispositivo",
+  "msg_sleep_device_may_be_asleep": "Comando inviato. Il dispositivo potrebbe essere già in modalità di ibernazione.",
   "msg_stations": "stazioni",
   "msg_system_ready": "Sistema pronto, ricarica in corso...",
   "msg_try_searching": "Prova a cercare.",

@@ -238,6 +238,8 @@
   "msg_search_no_servers": "La recherche a échoué. Aucun serveur disponible. Réessayez plus tard.",
   "msg_searchterm": "Entrez le terme de recherche",
   "msg_settings_saved": "Paramètres enregistrés. Redémarrage...",
+  "msg_sleep_command_sent": "✓ Commande de mise en veille envoyée à l'appareil",
+  "msg_sleep_device_may_be_asleep": "Commande envoyée. L'appareil est peut-être déjà en mode veille prolongée.",
   "msg_stations": "stations",
   "msg_system_ready": "Système prêt, rechargement...",
   "msg_try_searching": "Essayez de chercher.",

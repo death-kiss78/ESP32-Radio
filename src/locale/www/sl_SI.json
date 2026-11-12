@@ -238,6 +238,8 @@
   "msg_search_no_servers": "Iskanje ni bilo uspešno. Na voljo ni strežnikov. Poskusite pozneje.",
   "msg_searchterm": "Vnesite iskalni termin",
   "msg_settings_saved": "Nastavitve shranjene. Ponovni zagon...",
+  "msg_sleep_command_sent": "✓ Ukaz »Hibernate« je bil poslan na napravo",
+  "msg_sleep_device_may_be_asleep": "Ukaz je bil poslan. Naprava je morda že v stanju mirovanja.",
   "msg_stations": "postaje",
   "msg_system_ready": "Sistem je pripravljen, ponovno polnjenje...",
   "msg_try_searching": "Poskusite poiskati.",

@@ -238,6 +238,8 @@
   "msg_search_no_servers": "Zoeken mislukt. Geen servers beschikbaar. Probeer het later opnieuw.",
   "msg_searchterm": "Voer zoekterm in",
   "msg_settings_saved": "Instellingen opgeslagen. Herstarten...",
+  "msg_sleep_command_sent": "✓ Het commando ‘Hibernate’ is naar het apparaat verzonden",
+  "msg_sleep_device_may_be_asleep": "Commando verzonden. Het apparaat bevindt zich mogelijk al in de slaapstand.",
   "msg_stations": "stations",
   "msg_system_ready": "Systeem gereed, herladen...",
   "msg_try_searching": "Probeer te zoeken.",

@@ -238,6 +238,8 @@
   "msg_search_no_servers": "Søgning mislykkedes. Ingen servere tilgængelige. Prøv igen senere.",
   "msg_searchterm": "Indtast søgeterm",
   "msg_settings_saved": "Indstillinger gemt. Genstarter...",
+  "msg_sleep_command_sent": "✓ Kommandoen »Hibernate« er sendt til enheden",
+  "msg_sleep_device_may_be_asleep": "Kommandoen er sendt. Enheden er muligvis allerede i dvaletilstand.",
   "msg_stations": "stationer",
   "msg_system_ready": "Systemet er klar til genindlæsning.",
   "msg_try_searching": "Prøv at søge.",

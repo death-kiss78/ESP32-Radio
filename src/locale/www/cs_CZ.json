@@ -238,6 +238,8 @@
   "msg_search_no_servers": "Hledání se nezdařilo. Nejsou k dispozici žádné servery. Zkuste to později.",
   "msg_searchterm": "Zadejte hledaný výraz",
   "msg_settings_saved": "Nastavení uloženo. Restartuji...",
+  "msg_sleep_command_sent": "✓ Příkaz „Hibernate“ odeslán do zařízení",
+  "msg_sleep_device_may_be_asleep": "Příkaz odeslán. Zařízení je možná již v režimu spánku.",
   "msg_stations": "stanice",
   "msg_system_ready": "Systém je připraven, načítá se...",
   "msg_try_searching": "Zkuste hledat.",

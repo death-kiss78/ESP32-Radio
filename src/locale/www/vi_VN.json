@@ -238,6 +238,8 @@
   "msg_search_no_servers": "Tìm kiếm không thành công. Không có máy chủ nào khả dụng. Vui lòng thử lại sau.",
   "msg_searchterm": "Nhập từ khóa tìm kiếm",
   "msg_settings_saved": "Đã lưu cài đặt. Đang khởi động lại...",
+  "msg_sleep_command_sent": "✓ Lệnh Hibernate đã được gửi đến thiết bị",
+  "msg_sleep_device_may_be_asleep": "Lệnh đã được gửi. Thiết bị có thể đã ở chế độ ngủ đông.",
   "msg_stations": "đài",
   "msg_system_ready": "Hệ thống đã sẵn sàng, đang tải lại...",
   "msg_try_searching": "Hãy thử tìm kiếm xem.",

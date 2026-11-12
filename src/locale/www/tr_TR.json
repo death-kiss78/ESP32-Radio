@@ -238,6 +238,8 @@
   "msg_search_no_servers": "Arama başarısız oldu. Kullanılabilir sunucu yok. Daha sonra tekrar deneyin.",
   "msg_searchterm": "Arama terimi girin",
   "msg_settings_saved": "Ayarlar kaydedildi. Yeniden başlatılıyor...",
+  "msg_sleep_command_sent": "✓ Cihaza “Hibernate” komutu gönderildi",
+  "msg_sleep_device_may_be_asleep": "Komut gönderildi. Cihaz halihazırda hazırda bekleme modunda olabilir.",
   "msg_stations": "istasyonlar",
   "msg_system_ready": "Sistem hazır, yeniden yükleniyor...",
   "msg_try_searching": "Aramayı dene.",

@@ -283,7 +283,7 @@
 
       fetch(this.action + '?' + new URLSearchParams(new FormData(this)))
 	  .then(() => {
-	  status.textContent = '✓ Comanda Sleep a fost trimisă către dispozitiv';
+	  status.textContent = t('msg_sleep_command_sent', '✓ Hibernate command sent to device');
 	  status.style.color = '#4caf50';
 	  
 	  setTimeout(() => {
@@ -291,7 +291,7 @@
 	  }, 3000);
 	  })
 	  .catch(() => {
-	  status.textContent ='Comanda a fost trimisă. Dispozitivul poate fi deja în sleep.';
+	  status.textContent = t('msg_sleep_device_may_be_asleep', 'Command sent. The device might already be in hibernation.');
 	  status.style.color = '#ff9800';
 	  
 	  setTimeout(() => {

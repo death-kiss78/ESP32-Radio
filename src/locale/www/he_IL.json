@@ -238,6 +238,8 @@
   "msg_search_no_servers": "החיפוש נכשל. אין שרתים זמינים. נסה שוב מאוחר יותר.",
   "msg_searchterm": "הזן מונח חיפוש",
   "msg_settings_saved": "הגדרות נשמרו. מאתחל...",
+  "msg_sleep_command_sent": "✓ פקודת \"Hibernate\" נשלחה למכשיר",
+  "msg_sleep_device_may_be_asleep": "הפקודה נשלחה. ייתכן שהמכשיר כבר נמצא במצב שינה.",
   "msg_stations": "תחנות",
   "msg_system_ready": "המערכת מוכנה, טוענת מחדש...",
   "msg_try_searching": "נסה לחפש.",

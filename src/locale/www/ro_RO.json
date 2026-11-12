@@ -238,6 +238,8 @@
   "msg_search_no_servers": "Căutarea a eșuat. Nu există servere disponibile. Încercați din nou mai târziu.",
   "msg_searchterm": "Introduceți termen de căutare",
   "msg_settings_saved": "Setările au fost salvate. Repornire...",
+  "msg_sleep_command_sent": "✓ Comanda „Hibernate” a fost trimisă către dispozitiv",
+  "msg_sleep_device_may_be_asleep": "Comanda a fost trimisă. Este posibil ca dispozitivul să se afle deja în stare de hibernare.",
   "msg_stations": "stații",
   "msg_system_ready": "Sistem pregătit, reîncărcare...",
   "msg_try_searching": "Încercați să căutați.",

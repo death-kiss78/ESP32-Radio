@@ -238,6 +238,8 @@
   "msg_search_no_servers": "Leit mistókst. Engir netþjónar tiltækir. Reyndu aftur síðar.",
   "msg_searchterm": "Slá inn leitarorð",
   "msg_settings_saved": "Stillingar vistaðar. Endurræsingu...",
+  "msg_sleep_command_sent": "✓ Hibernate-skipun send til tækisins",
+  "msg_sleep_device_may_be_asleep": "Skipun send. Tækið gæti þegar verið í dvalarham.",
   "msg_stations": "stöðvar",
   "msg_system_ready": "Kerfið er tilbúið, endurhleðsla í gangi...",
   "msg_try_searching": "Reyndu að leita.",

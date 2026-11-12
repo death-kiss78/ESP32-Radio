@@ -238,6 +238,8 @@
   "msg_search_no_servers": "Haku epäonnistui. Palvelimia ei ole saatavilla. Yritä myöhemmin uudelleen.",
   "msg_searchterm": "Syötä hakusana",
   "msg_settings_saved": "Asetukset tallennettu. Käynnistetään uudelleen...",
+  "msg_sleep_command_sent": "✓ Laitteelle lähetetty hibernate-komento",
+  "msg_sleep_device_may_be_asleep": "Komento lähetetty. Laite saattaa olla jo lepotilassa.",
   "msg_stations": "asemat",
   "msg_system_ready": "Järjestelmä valmis, lataus...",
   "msg_try_searching": "Yritä etsiä.",

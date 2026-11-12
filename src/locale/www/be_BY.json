@@ -238,6 +238,8 @@
   "msg_search_no_servers": "Пошук не ўдаўся. Сэрвераў няма. Паспрабуйце зноў пазней.",
   "msg_searchterm": "Увядзіце пошукавы тэрмін",
   "msg_settings_saved": "Налады захаваныя. Перазагрузка...",
+  "msg_sleep_command_sent": "✓ Каманда Hibernate адпраўлена на прыладу",
+  "msg_sleep_device_may_be_asleep": "Каманда адпраўлена. Прылада можа ўжо знаходзіцца ў спячым рэжыме.",
   "msg_stations": "станцыі",
   "msg_system_ready": "Сістэма гатовая, загрузка...",
   "msg_try_searching": "Паспрабуйце пашукаць.",

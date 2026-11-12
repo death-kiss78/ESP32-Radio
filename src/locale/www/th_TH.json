@@ -238,6 +238,8 @@
   "msg_search_no_servers": "ค้นหาไม่พบ. ไม่มีเซิร์ฟเวอร์ให้บริการ. ลองใหม่อีกครั้ง.",
   "msg_searchterm": "ป้อนคำค้นหา",
   "msg_settings_saved": "บันทึกการตั้งค่าแล้ว กำลังรีบูต...",
+  "msg_sleep_command_sent": "✓ คำสั่ง Hibernate ได้ส่งไปยังอุปกรณ์แล้ว",
+  "msg_sleep_device_may_be_asleep": "คำสั่งได้ส่งไปแล้ว อุปกรณ์อาจอยู่ในโหมดพักการทำงานแล้ว",
   "msg_stations": "สถานี",
   "msg_system_ready": "ระบบพร้อม, กำลังโหลดใหม่...",
   "msg_try_searching": "ลองค้นหาดู",

@@ -238,6 +238,8 @@
   "msg_search_no_servers": "Otsing ebaõnnestus. Serverid ei ole saadaval. Proovige hiljem uuesti.",
   "msg_searchterm": "Sisestage otsingutermin",
   "msg_settings_saved": "Seaded salvestatud. Taaskäivitamine...",
+  "msg_sleep_command_sent": "✓ Seadmele saadeti käsk „Hibernate“",
+  "msg_sleep_device_may_be_asleep": "Käsk saadeti. Seade võib olla juba puhkeolekus.",
   "msg_stations": "jaamad",
   "msg_system_ready": "Süsteem valmis, laadimine...",
   "msg_try_searching": "Proovige otsida.",

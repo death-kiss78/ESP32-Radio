@@ -238,6 +238,8 @@
   "msg_search_no_servers": "Vyhľadávanie bolo neúspešné. Nie sú k dispozícii žiadne servery. Skúste to neskôr.",
   "msg_searchterm": "Zadajte hľadaný výraz",
   "msg_settings_saved": "Nastavenia uložené. Reštartujem...",
+  "msg_sleep_command_sent": "✓ Príkaz „Hibernate“ bol odoslaný do zariadenia",
+  "msg_sleep_device_may_be_asleep": "Príkaz odoslaný. Zariadenie môže byť už v režime hibernácie.",
   "msg_stations": "stanice",
   "msg_system_ready": "Systém pripravený, načítanie...",
   "msg_try_searching": "Skúste hľadať.",

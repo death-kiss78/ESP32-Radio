@@ -238,6 +238,8 @@
   "msg_search_no_servers": "Søket mislyktes. Ingen servere tilgjengelige. Prøv igjen senere.",
   "msg_searchterm": "Skriv inn søkeord",
   "msg_settings_saved": "Innstillinger lagret. Starter på nytt...",
+  "msg_sleep_command_sent": "✓ Kommandoen «Hibernate» er sendt til enheten",
+  "msg_sleep_device_may_be_asleep": "Kommandoen er sendt. Enheten kan allerede være i dvalemodus.",
   "msg_stations": "stasjoner",
   "msg_system_ready": "Systemet er klart, laster om...",
   "msg_try_searching": "Prøv å søke.",

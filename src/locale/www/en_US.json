@@ -238,6 +238,8 @@
   "msg_search_no_servers": "Search failed. No servers available. Try again later.",
   "msg_searchterm": "Enter search term",
   "msg_settings_saved": "Settings saved. Rebooting...",
+  "msg_sleep_command_sent": "✓ Hibernate command sent to device",
+  "msg_sleep_device_may_be_asleep": "Command sent. The device might already be in hibernation.",
   "msg_stations": "stations",
   "msg_system_ready": "System ready, reloading...",
   "msg_try_searching": "Try searching.",

@@ -238,6 +238,8 @@
   "msg_search_no_servers": "A pesquisa falhou. Não há servidores disponíveis. Tente novamente mais tarde.",
   "msg_searchterm": "Enter search term",
   "msg_settings_saved": "Settings saved. Rebooting...",
+  "msg_sleep_command_sent": "✓ Comando de hibernação enviado ao dispositivo",
+  "msg_sleep_device_may_be_asleep": "Comando enviado. O dispositivo talvez já esteja em hibernação.",
   "msg_stations": "stations",
   "msg_system_ready": "Sistema pronto, recarregando...",
   "msg_try_searching": "Tente pesquisar.",

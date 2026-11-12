@@ -238,6 +238,8 @@
   "msg_search_no_servers": "搜索失败。没有可用的服务器。稍后再试。",
   "msg_searchterm": "輸入搜尋詞",
   "msg_settings_saved": "設定已儲存。正在重啟...",
+  "msg_sleep_command_sent": "✓ 已向设备发送休眠命令",
+  "msg_sleep_device_may_be_asleep": "命令已发送。该设备可能已处于休眠状态。",
   "msg_stations": "個電台",
   "msg_system_ready": "系统准备就绪，重新加载...",
   "msg_try_searching": "尝试搜索。",

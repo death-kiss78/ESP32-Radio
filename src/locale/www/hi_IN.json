@@ -238,6 +238,8 @@
   "msg_search_no_servers": "खोज असफल रही। कोई सर्वर उपलब्ध नहीं है। बाद में फिर से प्रयास करें।",
   "msg_searchterm": "खोज शब्द दर्ज करें",
   "msg_settings_saved": "सेटिंग्स सहेजी गईं। रीबूट हो रहा है...",
+  "msg_sleep_command_sent": "✓ डिवाइस को Hibernate कमांड भेजा गया",
+  "msg_sleep_device_may_be_asleep": "आदेश भेजा गया। डिवाइस पहले से ही हाइबरनेशन में हो सकता है।",
   "msg_stations": "स्टेशन",
   "msg_system_ready": "सिस्टम तैयार, पुनः लोड हो रहा है...",
   "msg_try_searching": "खोजने की कोशिश करें।",

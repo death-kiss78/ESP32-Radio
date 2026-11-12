@@ -238,6 +238,8 @@
   "msg_search_no_servers": "Pencarian gagal. Tidak ada server yang tersedia. Coba lagi nanti.",
   "msg_searchterm": "Enter search term",
   "msg_settings_saved": "Settings saved. Rebooting...",
+  "msg_sleep_command_sent": "✓ Perintah hibernasi telah dikirim ke perangkat",
+  "msg_sleep_device_may_be_asleep": "Perintah telah dikirim. Perangkat mungkin sudah dalam mode hibernasi.",
   "msg_stations": "stations",
   "msg_system_ready": "Sistem siap, memuat ulang...",
   "msg_try_searching": "Coba cari.",

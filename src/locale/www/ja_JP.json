@@ -238,6 +238,8 @@
   "msg_search_no_servers": "検索に失敗しました。利用可能なサーバーがありません。後で再試行してください。",
   "msg_searchterm": "検索語を入力",
   "msg_settings_saved": "設定を保存しました。再起動中...",
+  "msg_sleep_command_sent": "✓ デバイスにハイバネートコマンドを送信しました",
+  "msg_sleep_device_may_be_asleep": "コマンドを送信しました。デバイスはすでに休止状態になっている可能性があります。",
   "msg_stations": "局",
   "msg_system_ready": "システム準備完了、リロード中",
   "msg_try_searching": "検索してみてください。",

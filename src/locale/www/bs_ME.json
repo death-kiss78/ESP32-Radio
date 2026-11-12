@@ -238,6 +238,8 @@
   "msg_search_no_servers": "Pretraga nije uspjela. Nema dostupnih servera. Pokušajte ponovo kasnije.",
   "msg_searchterm": "Unesite pojam za pretragu",
   "msg_settings_saved": "Postavke sačuvane. Ponovno pokretanje...",
+  "msg_sleep_command_sent": "✓ Komanda hibernacije poslana uređaju",
+  "msg_sleep_device_may_be_asleep": "Komanda poslana. Uređaj je možda već u hibernaciji.",
   "msg_stations": "stanice",
   "msg_system_ready": "Sistem spreman, učitavanje...",
   "msg_try_searching": "Pokušajte pretražiti.",

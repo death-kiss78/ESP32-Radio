@@ -238,6 +238,8 @@
   "msg_search_no_servers": "A keresés sikertelen. Nincs elérhető szerver. Próbálja meg később újra.",
   "msg_searchterm": "Adja meg a keresendő kifejezést",
   "msg_settings_saved": "Beállítások mentve. Újraindítás...",
+  "msg_sleep_command_sent": "✓ A „Hibernate” parancs elküldve az eszközre",
+  "msg_sleep_device_may_be_asleep": "A parancs elküldve. Lehet, hogy az eszköz már hibernált állapotban van.",
   "msg_stations": "állomások",
   "msg_system_ready": "Rendszer készen áll, újratöltés...",
   "msg_try_searching": "Próbáljon keresni.",
