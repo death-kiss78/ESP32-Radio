@@ -137,28 +137,25 @@ jobs:
           INPUT_VERSION: ${{ inputs.version }}
         run: |
           if [ -n "$INPUT_VERSION" ]; then
-
             VERSION="$INPUT_VERSION"
-            echo "ℹ️ Using provided version: ${VERSION}"
+            echo "Using version from workflow_call: $VERSION"
 
           elif [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
-
             VERSION=$(grep -oP '#define RADIOVERSION "\K[^"]+' src/core/options.h || true)
-            echo "ℹ️ No version input; using RADIOVERSION: ${VERSION}"
+            echo "Using RADIOVERSION: $VERSION"
 
           else
-
             VERSION=${GITHUB_REF#refs/tags/}
-
+            echo "Using tag version: $VERSION"
           fi
 
           if [ -z "$VERSION" ]; then
-            echo "❌ Could not determine a release version."
+            echo "Could not determine a release version."
             exit 1
           fi
 
           if [[ ! "$VERSION" =~ ^[0-9]+(\.[0-9]+)+$ ]]; then
-            echo "❌ Invalid release version: ${VERSION}"
+            echo "Invalid release version: $VERSION"
             exit 1
           fi
 
@@ -168,8 +165,8 @@ jobs:
           echo "Final version: ${VERSION}"
 
           echo "myRadio Version $(grep -oP '#define RADIOVERSION "\K[^"]+' src/core/options.h)" > version.txt
-          
-      - name: Validate version matches options.h
+
+     - name: Validate version matches options.h
         run: |
           EXPECTED_VERSION="${{ steps.get_version.outputs.version }}"
           ACTUAL_VERSION=$(grep -oP '#define RADIOVERSION "\K[^"]+' src/core/options.h)
