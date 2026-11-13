@@ -104,11 +104,3 @@ jobs:
         run: |
           git push
           git push origin "${{ steps.version.outputs.version }}"
-
-  build-release:
-    needs: prepare-release
-
-    uses: ./.github/workflows/build-release-firmware.yml
-
-    with:
-      version: ${{ needs.prepare-release.outputs.version }}
