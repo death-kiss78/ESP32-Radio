@@ -108,7 +108,7 @@ jobs:
   build-release:
     needs: prepare-release
 
-    uses: ./.github/workflows/build-and-release.yml
+    uses: ./.github/workflows/build-release-firmware.yml
 
     with:
       version: ${{ needs.prepare-release.outputs.version }}
