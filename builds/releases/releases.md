@@ -46,10 +46,10 @@ eh Device Scanner app can be used to connect to the WebUI easily - get the app [
   - to view pin usage, click the firmware's link below
 
 ### No Display Firmware
-  - [`no_display_test.bin`](https://death-kiss78.github.io/ESP32-Radio/boards.html?board=no_display)
+  - [`no_display_test.bin`](https://death-kiss78.github.io/myRadio/boards.html?board=no_display)
 
 ### Death-Kiss78 Firmware
-  - [`death-kiss78_es3c28s.bin`](https://death-kiss78.github.io/ESP32-Radio/boards.html?board=es3c28s)
+  - [`death-kiss78_es3c28s.bin`](https://death-kiss78.github.io/myRadio/boards.html?board=es3c28s)
 ### Add Yours
   - you can either fork my `ehradio` repo and edit these files or request a build be added
     - use [the generator](https://trip5.github.io/ehRadio/myoptions/generator.html) and copy the link and include it in your request

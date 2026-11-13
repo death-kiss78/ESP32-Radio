@@ -40,7 +40,7 @@
 /* --- Firmware File --- */
 
 #define FIRMWARE "no_display_test.bin" // "esp32_s3_n16r8", "ESP32-S3", "No Display"
-#define FIRMWARE_NAME "No Display" // "https://death-kiss78.github.io/ESP32-Radio/boards.html?board=no_display"
+#define FIRMWARE_NAME "No Display" // "https://death-kiss78.github.io/myRadio/boards.html?board=no_display"
 #define ENABLE_UPDATER // enables OTA updates
 
 /* --- SPI Bus Pins --- */

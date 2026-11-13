@@ -1,8 +1,8 @@
-site_name: ESP32-Radio
-site_description: ESP32 Radio (yoRadio fork)
-site_url: https://death-kiss78.github.io/ESP32-Radio/
-repo_url: https://github.com/death-kiss78/ESP32-Radio
-repo_name: death-kiss78/ESP32-Radio
+site_name: myRadio
+site_description: myRadio (yoRadio fork)
+site_url: https://death-kiss78.github.io/myRadio/
+repo_url: https://github.com/death-kiss78/myRadio
+repo_name: death-kiss78/myRadio
 
 theme:
   name: material
@@ -36,7 +36,7 @@ markdown_extensions:
   - pymdownx.magiclink:
       repo_url_shorthand: true
       user: death-kiss78
-      repo: ESP32-Radio
+      repo: myRadio
   - pymdownx.highlight:
       anchor_linenums: true
   - pymdownx.inlinehilite

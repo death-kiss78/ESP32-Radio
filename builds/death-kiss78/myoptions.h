@@ -45,7 +45,7 @@
 
 /* --- Firmware File --- */
   #define FIRMWARE "death-kiss78_es3c28s.bin" // "esp32_s3_n16r8", "ESP32-S3", "Death-Kiss78"
-  #define FIRMWARE_NAME "es3c28s" // "https://death-kiss78.github.io/ESP32-Radio/boards.html?board=es3c28s"
+  #define FIRMWARE_NAME "es3c28s" // "https://death-kiss78.github.io/myRadio/boards.html?board=es3c28s"
 
 #define ENABLE_UPDATER // enables OTA updates
 #define ESPFILEUPDATER_VERBOSE true // This enables ESPFileUpdater's debug log in serial.  Only add if you really want to watch serial log for what may be causing fetch errors.

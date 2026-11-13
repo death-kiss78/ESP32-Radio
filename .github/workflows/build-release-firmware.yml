@@ -134,7 +134,7 @@ jobs:
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
           echo "tag=${VERSION}" >> $GITHUB_OUTPUT
           echo "Final version: ${VERSION}"
-          echo "ESP32-Radio Version $(grep -oP '#define RADIOVERSION "\K[^"]+' src/core/options.h)" > version.txt
+          echo "myRadio Version $(grep -oP '#define RADIOVERSION "\K[^"]+' src/core/options.h)" > version.txt
 
       - name: Validate version matches options.h
         run: |
@@ -279,7 +279,7 @@ jobs:
             Upload_Files.zip
           retention-days: 90
 
-      - name: Create ESP32-Radio Release
+      - name: Create myRadio Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.get_version.outputs.tag }}

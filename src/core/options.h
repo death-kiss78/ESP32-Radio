@@ -1014,7 +1014,7 @@ or examine the examples in builds/trip5 and make your own!
 /* --- SOURCE OF UPDATE FILES --- */
 /* only used if FIRMWARE is defined as it is in Trip5's automatic Github builds */
 #ifndef GITHUBURL
-  #define GITHUBURL "https://github.com/death-kiss78/ESP32-Radio" // used by the ESPFileUpdater in BrowserClient (and in URLs below)
+  #define GITHUBURL "https://github.com/death-kiss78/myRadio" // used by the ESPFileUpdater in BrowserClient (and in URLs below)
 #endif
 
 #ifdef ENABLE_UPDATER // if this is defined, enables online updates
@@ -1032,7 +1032,7 @@ or examine the examples in builds/trip5 and make your own!
     #define CHECKUPDATEURL GITHUBURL "/releases/latest/download/version.txt" // automatically extracted from options.h during Github workflow
   #endif
   #ifndef VERSIONSTRING
-    #define VERSIONSTRING "ESP32-Radio Version" // the file above should have a line that starts with this followed by a version number
+    #define VERSIONSTRING "myRadio Version" // the file above should have a line that starts with this followed by a version number
   #endif
   #ifndef CHECKUPDATEURL_TIME
     #define CHECKUPDATEURL_TIME "1 day"

@@ -2,7 +2,7 @@
 
 # ehRadio
 
-***This documentation is the same on the [Github Page](https://death-kiss78.github.io/ESP32-Radio/), which may be easier to read.***
+***This documentation is the same on the [Github Page](https://death-kiss78.github.io/myRadio/), which may be easier to read.***
 
 ## Introduction
 
@@ -59,7 +59,7 @@ ehRadio inherits a lot from ёRadio, but improvements have been made to make it 
     - upload files directly using the SD Card Manager
     - WebUI themes match display themes
 
-  - [Web flasher](https://death-kiss78.github.io/ESP32-Radio/flasher.html) & Internet OTA updates
+  - [Web flasher](https://death-kiss78.github.io/myRadio/flasher.html) & Internet OTA updates
     - make getting a new version easy-peasy
     - *caveat:* your build must be in the `builds` folder of this repository
 
@@ -116,7 +116,7 @@ More screenshots from the WebUI are [here](WebUI.md).
 
 ## Documentation
 
-The best starting point (after reading this page) is the [myoptions Generator](https://death-kiss78.github.io/ESP32-Radio/myoptions/generator.html).
+The best starting point (after reading this page) is the [myoptions Generator](https://death-kiss78.github.io/myRadio/myoptions/generator.html).
 This can assist in making a very good `myoptions.h` file, which should be placed in the root of the build folder next to `platformio.ini` (which the generator also makes).
 
 The generator contains almost all supported hardware peripherals and build options which can be used when building an ehRadio, as well as many notes.
@@ -260,13 +260,13 @@ Other display sizes may have quirks or issues with layouts that need repair.
 ## Radio Creations
 
 I can't 100% confirm this, but I am pretty sure all devices built for other ESP-based radio projects will run ehRadio, as long as the hardware is supported.
-And although (as of `2026.06.15`), ehRadio has been reworked so an ESP32-S3 can be wired with an SPI display and a VS1053 (which ёRadio & ESP32-RadioV2 can't),
+And although (as of `2026.06.15`), ehRadio has been reworked so an ESP32-S3 can be wired with an SPI display and a VS1053 (which ёRadio & myRadioV2 can't),
 
 Below here are some sketches and helpful hints to building one of the "prebuilt" firmwares as available in the Releases and the
-[online flasher](https://death-kiss78.github.io/ESP32-Radio/flasher.html).
+[online flasher](https://death-kiss78.github.io/myRadio/flasher.html).
 
 If you already have a good idea on how the hardware works and would just like to use a prebuilt binary,
-check out the [Releases](https://death-kiss78.github.io/ESP32-Radio/releases/) and click on a link to open the generator with that binary's profile,
+check out the [Releases](https://death-kiss78.github.io/myRadio/releases/) and click on a link to open the generator with that binary's profile,
 which includes hardware needed, pins to connect, and more.
 There is also a `no_display` build here if you just wish to test functionality.
 
@@ -274,7 +274,7 @@ Note that if following this path, you don't necessarily to attach all peripheral
 The radio needs only the ESP board and the audio decoder to function... although your WebUI may show links to peripherals that don't exist.
 
 If you don't want to mess around with VS Code but would still like your own build added to the Releases, you can make a
-[firmware request](https://death-kiss78.github.io/ESP32-Radio/discussions/categories/firmware-requests).
+[firmware request](https://death-kiss78.github.io/myRadio/discussions/categories/firmware-requests).
 Please also do some research before requesting a firmware.
 
 ### Trip5's Radios
@@ -320,7 +320,7 @@ Want to see more pictures? e2002 collected a lot of pictures of ёRadio builds [
 Edzelf was probably the first to work on the idea of an ESP-based radio with [Esp-radio](https://github.com/Edzelf/Esp-radio/), making his first Github upload
 [April 4, 2016](https://github.com/Edzelf/Esp-radio/tree/0a53a03c2301e9e5f0bfaee418942be67739dee0) which included audio decoding with a VS1053 decoder, built on a ESP8266.
 
-Edzelf then made [ESP32-Radio](https://github.com/Edzelf/ESP32-Radio/), with his first release on [May 23, 2017](https://github.com/Edzelf/ESP32-Radio/tree/c268677dd8e46db2b7a8bfbd12a131c169e32019).
+Edzelf then made [myRadio](https://github.com/Edzelf/myRadio/), with his first release on [May 23, 2017](https://github.com/Edzelf/myRadio/tree/c268677dd8e46db2b7a8bfbd12a131c169e32019).
 Later, [ESP32Radio-V2](https://github.com/Edzelf/ESP32Radio-V2/) was created on [October 4, 2021](https://github.com/Edzelf/ESP32Radio-V2/tree/81ea92481eb36e49c8983e9dd1e5a34fecca73a9) and includes I2S audio decoding (see below).
 Edzelf still maintains ESP32Radio-V2.
 
@@ -331,7 +331,7 @@ Ka-Radio32 credits MrBuddyCasino's [ESP32_MP3_Decoder](https://github.com/MrBudd
 [January 19, 2019](https://github.com/MrBuddyCasino/ESP32_MP3_Decoder/tree/f1a92e1fbdcca3f2ffc6570aa599bc24806d8fd1).
 
 At some point, schreibfaul1 began work on the [ESP32-vs1053_ext](https://github.com/schreibfaul1/ESP32-vs1053_ext) library, making his first version available
-on Github [October 13, 2017](https://github.com/schreibfaul1/ESP32-vs1053_ext/tree/651dcce0f7d617a81153bc9a078ee8542db200f1), crediting Edzelf's ESP32-Radio as inspiration.
+on Github [October 13, 2017](https://github.com/schreibfaul1/ESP32-vs1053_ext/tree/651dcce0f7d617a81153bc9a078ee8542db200f1), crediting Edzelf's myRadio as inspiration.
 Further work has been done by [nstepanets](https://github.com/nstepanets/ESP32-vs1053_ext) who took over [October 25, 2025](https://github.com/nstepanets/ESP32-vs1053_ext/tree/bddf3137ec361a6b13d0a1687d3065561d507b8c).
 
 schreibfaul1 also created the [ESP32-audioI2S](https://github.com/schreibfaul1/ESP32-audioI2S) library, making his first version available on Github [October 28, 2018](https://github.com/schreibfaul1/ESP32-audioI2S/tree/dc87801a7b1b369925080276cedd5a019715470a).

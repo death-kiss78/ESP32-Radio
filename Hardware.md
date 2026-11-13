@@ -1,9 +1,9 @@
-# ESP32-Radio Hardware Choices
+# myRadio Hardware Choices
 
 There are many considerations to make when building a radio.
 Here are listed all of the supported hardware, some with more detail than others.
 
-When in doubt, also consult the [myoptions Generator](https://death-kiss78.github.io/ESP32-Radio/myoptions/generator.html)
+When in doubt, also consult the [myoptions Generator](https://death-kiss78.github.io/myRadio/myoptions/generator.html)
 which also contains tips about the hardware.
 
 ## ESP Board
@@ -357,7 +357,7 @@ That adds interference. The easy fix is to disable dimming and tie the BL pin to
 
 ## Controls
 
-ESP32-Radio can be built with various control methods, including rotary encoders, buttons, an IR receiver, touchscreen, WebUI, Home Assistant, MQTT, Telnet, and HTTP.
+myRadio can be built with various control methods, including rotary encoders, buttons, an IR receiver, touchscreen, WebUI, Home Assistant, MQTT, Telnet, and HTTP.
 
 The most basic physical control is a rotary encoder.  All major functions can be accomplished with just one encoder.
 
@@ -474,7 +474,7 @@ Most users will not remember the difference between "shortly after power-up" and
 
 Due to the playlist being stored as a 16-bit number internally, the limit is 65,535 audio files.
 
-### Special Note Regarding `/ESP32-Radio.data`
+### Special Note Regarding `/myRadio.data`
 
 This folder contains special index files to enable faster file-seeking during playback.
 
