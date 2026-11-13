@@ -10,6 +10,9 @@ jobs:
   prepare-release:
     runs-on: ubuntu-latest
 
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+
     steps:
       - uses: actions/checkout@v4
         with:
@@ -18,7 +21,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.x'
+          python-version: "3.x"
 
       - name: Increment version
         id: version
@@ -31,7 +34,10 @@ jobs:
 
           text = options.read_text(encoding="utf-8")
 
-          m = re.search(r'#define\s+RADIOVERSION\s+"(\d+)\.(\d+)\.(\d+)"', text)
+          m = re.search(
+              r'#define\s+RADIOVERSION\s+"(\d+)\.(\d+)\.(\d+)"',
+              text
+          )
 
           if not m:
               raise SystemExit("RADIOVERSION not found")
@@ -60,14 +66,17 @@ jobs:
 
           options.write_text(text, encoding="utf-8")
 
-          print(version)
-
           with open("version.txt", "w") as f:
               f.write(version)
+
+          print(version)
           EOF
 
           VERSION=$(cat version.txt)
+
           echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+          echo "New version: $VERSION"
 
       - name: Run prepare_releases.py
         run: |
@@ -83,14 +92,19 @@ jobs:
           git add src/core/options.h
           git add builds/releases/
 
-          git commit -m "Release ${VERSION}"
+          git commit -m "Release ${VERSION}" || echo "Nothing to commit"
 
       - name: Create tag
         run: |
           VERSION="${{ steps.version.outputs.version }}"
+
           git tag "${VERSION}"
 
       - name: Push changes and tag
         run: |
           git push
           git push origin "${{ steps.version.outputs.version }}"
+
+  build-release:
+    needs: prepare-release
+    uses: ./.github/workflows/build-release-firmware.yml
