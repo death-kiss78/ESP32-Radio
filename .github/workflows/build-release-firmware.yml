@@ -2,9 +2,15 @@ name: Build and Release Firmware
 
 on:
   workflow_call:
+    inputs:
+      version:
+        required: false
+        type: string
+
   push:
     tags:
       - '*'
+
   workflow_dispatch:
     inputs:
       version:
@@ -12,7 +18,7 @@ on:
         required: false
         default: ''
         type: string
-
+        
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
@@ -130,28 +136,39 @@ jobs:
         env:
           INPUT_VERSION: ${{ inputs.version }}
         run: |
-          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+          if [ -n "$INPUT_VERSION" ]; then
+
             VERSION="$INPUT_VERSION"
-            if [ -z "$VERSION" ]; then
-              VERSION=$(grep -oP '#define RADIOVERSION "\K[^"]+' src/core/options.h || true)
-              echo "ℹ️ No version input; using RADIOVERSION: ${VERSION}"
-            fi
+            echo "ℹ️ Using provided version: ${VERSION}"
+
+          elif [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+
+            VERSION=$(grep -oP '#define RADIOVERSION "\K[^"]+' src/core/options.h || true)
+            echo "ℹ️ No version input; using RADIOVERSION: ${VERSION}"
+
           else
+
             VERSION=${GITHUB_REF#refs/tags/}
+
           fi
+
           if [ -z "$VERSION" ]; then
             echo "❌ Could not determine a release version."
             exit 1
           fi
+
           if [[ ! "$VERSION" =~ ^[0-9]+(\.[0-9]+)+$ ]]; then
             echo "❌ Invalid release version: ${VERSION}"
             exit 1
           fi
+
           echo "version=${VERSION}" >> $GITHUB_OUTPUT
           echo "tag=${VERSION}" >> $GITHUB_OUTPUT
-          echo "Final version: ${VERSION}"
-          echo "myRadio Version $(grep -oP '#define RADIOVERSION "\K[^"]+' src/core/options.h)" > version.txt
 
+          echo "Final version: ${VERSION}"
+
+          echo "myRadio Version $(grep -oP '#define RADIOVERSION "\K[^"]+' src/core/options.h)" > version.txt
+          
       - name: Validate version matches options.h
         run: |
           EXPECTED_VERSION="${{ steps.get_version.outputs.version }}"

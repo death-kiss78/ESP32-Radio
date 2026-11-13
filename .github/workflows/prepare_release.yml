@@ -105,6 +105,9 @@ jobs:
           git push
           git push origin "${{ steps.version.outputs.version }}"
 
-  build-release:
-    needs: prepare-release
-    uses: ./.github/workflows/build-release-firmware.yml
+build-release:
+  needs: prepare-release
+  uses: ./.github/workflows/build-and-release.yml
+
+  with:
+    version: ${{ needs.prepare-release.outputs.version }}
