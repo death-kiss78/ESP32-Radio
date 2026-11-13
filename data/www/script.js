@@ -4,7 +4,7 @@ var hostname = window.location.hostname;
 var modesd = false;
 const query = window.location.search;
 const params = new URLSearchParams(query);
-const Title = 'ehRadio';
+const Title = 'myRadio';
 if(params.size>0){
   if(params.has('host')) hostname=params.get('host');
 }
@@ -1086,7 +1086,7 @@ function exportCurrentPlaylist() {
 
 // === Webstations Share ===
 const SHARE_BODY_CORE =
-`This form will submit your playlist to webstations and will appear soon in ehRadio Curated Lists. Enter your playlist name below between the quotes. It will be processed using your Github user ID as a prefix.
+`This form will submit your playlist to webstations and will appear soon in myRadio Curated Lists. Enter your playlist name below between the quotes. It will be processed using your Github user ID as a prefix.
 
 PLAYLIST_NAME="Playlist"
 
@@ -1099,9 +1099,9 @@ Thanks for participating!
 - Trip5`;
 
 const SHARE_BODY_FALLBACK_HEADER =
-`Wow! That's a lot of radio stations! Unfortunately, ehRadio can't automatically submit such a large playlist. But you can still submit it!
+`Wow! That's a lot of radio stations! Unfortunately, myRadio can't automatically submit such a large playlist. But you can still submit it!
 
-Go back to ehRadio, export the playlist, save it, then attach the file to this message.
+Go back to myRadio, export the playlist, save it, then attach the file to this message.
 
 `;
 

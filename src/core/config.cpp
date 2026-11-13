@@ -107,7 +107,7 @@ void Config::init() {
 
 void Config::loadPreferences() {
   CONFIGTIMELOGRESET();
-  prefs.begin("ehradio", false);
+  prefs.begin("myradio", false);
   // Check config_set_magic first
   uint16_t configSetValue = 0;
   size_t configSetRead = prefs.getBytes("cfgset", &configSetValue, sizeof(configSetValue));
@@ -265,7 +265,7 @@ void Config::beginOfflineSdSession() {
 static void setNoStationState() {
   memset(config.station.url, 0, STATION_FIELD_LENGTH);
   memset(config.station.name, 0, STATION_FIELD_LENGTH);
-  strncpy(config.station.name, "ehRadio", STATION_FIELD_LENGTH);
+  strncpy(config.station.name, "myRadio", STATION_FIELD_LENGTH);
   config.station.ovol = 0;
   config.setTitle("");
 }
@@ -346,7 +346,7 @@ void Config::initPlaylistMode() {
         if (digitalRead(SD_CARD_DETECT_PIN)==HIGH) {
           if (network.status == SDOFFLINE) {
             FUNCTIONLOG("SD", "No SD card. Staying in offline mode.");
-            strncpy(config.station.name, "ehRadio", STATION_FIELD_LENGTH);
+            strncpy(config.station.name, "myRadio", STATION_FIELD_LENGTH);
             return;  // no SD — nothing more to init
           } else {
             store.play_mode = PM_WEB;
@@ -359,7 +359,7 @@ void Config::initPlaylistMode() {
       if (!sdman.ready && !sdman.start()) {
         if (network.status == SDOFFLINE) {
           FUNCTIONLOG("SD", "SD mount failed so staying in offline mode");
-          strncpy(config.station.name, "ehRadio", STATION_FIELD_LENGTH);
+          strncpy(config.station.name, "myRadio", STATION_FIELD_LENGTH);
           return;  // no SD — nothing more to init
         } else {
           store.play_mode = PM_WEB;
@@ -410,7 +410,7 @@ void Config::initPlaylistMode() {
       if (found > 0) {
         _lastStation = found;  // Resolved from persisted URL
       }
-      // else: stays 0 — will fall through to "ehRadio" below
+      // else: stays 0 — will fall through to "myRadio" below
     } else {
       _lastStation = _randomStation();  // SD mode: pick a random track
     }
@@ -428,7 +428,7 @@ void Config::initPlaylistMode() {
   // has to be applied on top of it.
   const bool haveStation = (_lastStation > 0) && utility.loadStation(_lastStation);
   if (!haveStation) {
-    FUNCTIONLOG("SD", "no playable station (playlist length %u) - showing the ehRadio placeholder", (unsigned)cs);
+    FUNCTIONLOG("SD", "no playable station (playlist length %u) - showing the myRadio placeholder", (unsigned)cs);
     setNoStationState();
   }
   // Paint the two derived text lines from what the table now holds.  _station() renders the meta line from
@@ -637,14 +637,14 @@ void Config::setDefaults() {
   saveValue(store.mdnsname, tmp);  //my line
   // Write the sentinel immediately after erase so the next boot finds a valid cfgset
   // and does not loop back into reset() again
-  prefs.begin("ehradio", false);
+  prefs.begin("myradio", false);
   prefs.putBytes("cfgset", &store.config_set_magic, sizeof(store.config_set_magic));
   prefs.end();
 }
 
 #if IR_PIN!=255
 /* ===== IR code storage =====
-   One NVS key per remote button in the dedicated "ehradioir" namespace, each holding that button's
+   One NVS key per remote button in the dedicated "myradioir" namespace, each holding that button's
    3 codes. The behaviour id and the compile-time default travel in the same row as the field offset
    and NVS key, so the table cannot fall out of sync and row order is irrelevant. */
 struct irKeyMapEntry {
@@ -681,7 +681,7 @@ static const irKeyMapEntry irKeyMap[] = {
 };
 static const size_t irKeyMapCount = sizeof(irKeyMap) / sizeof(irKeyMap[0]) - 1;
 
-static const char* const IR_NVS_NAMESPACE = "ehradioir";
+static const char* const IR_NVS_NAMESPACE = "myradioir";
 static const char* const IR_MAGIC_KEY = "irset";
 static const uint16_t IR_MAGIC = 1812;
 
@@ -892,7 +892,7 @@ void Config::bootInfo() {
   SERIALLOGLF();
   SERIALLOGLF();
   BOOTLOG("************************************************");
-  BOOTLOG("*               ehRadio %s             *", RADIOVERSION);
+  BOOTLOG("*               myRadio %s             *", RADIOVERSION);
   BOOTLOG("************************************************");
   BOOTLOG("Arduino API:\t%d.%d.%d", ARDUINO / 10000, (ARDUINO / 100) % 100, ARDUINO % 100);
   BOOTLOG("Arduino Core:\t%d.%d.%d", ESP_ARDUINO_VERSION_MAJOR, ESP_ARDUINO_VERSION_MINOR, ESP_ARDUINO_VERSION_PATCH);
@@ -1183,7 +1183,7 @@ void Config::deleteOldKeys() {
   prefs.remove("smartstartx"); // why the x...?
   prefs.remove("skipplupdn"); // replaced by oneclickswitch
   prefs.remove("showwthr"); // replaced by showweather
-  prefs.remove("ircodes"); // replaced by the named per-button keys in the "ehradioir" namespace
+  prefs.remove("ircodes"); // replaced by the named per-button keys in the "myradioir" namespace
   prefs.remove("softapdelay"); // SoftAP reboot delay removed: options.h SOFTAP_REBOOT_DELAY is the only control now
   prefs.remove("dspon"); // should never have been / it's a runtime-only state
   // none yet

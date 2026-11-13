@@ -4,7 +4,6 @@
  *  Created on: Jul 09.2017
  *  Updated on: Aug 15.2022, Apr 04.2025 (Maleksm)
  *      Author: Wolle (schreibfaul1), easy
- *  Some adjustments by Trip5 for ehRadio
  */
 #if VS1053_CS!=255
 #ifndef _vs1053_ext

@@ -622,7 +622,7 @@ bool Utility::loadStation(uint16_t stationId) {
   if (count == 0) {
     memset(config.station.url, 0, STATION_FIELD_LENGTH);
     memset(config.station.name, 0, STATION_FIELD_LENGTH);
-    strncpy(config.station.name, "ehRadio", STATION_FIELD_LENGTH);
+    strncpy(config.station.name, "myRadio", STATION_FIELD_LENGTH);
     config.station.ovol = 0;
     return false;
   }

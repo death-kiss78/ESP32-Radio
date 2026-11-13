@@ -1,5 +1,5 @@
 // @ts-nocheck
-/*  ehRadio myoptions Generator - generator.js
+/*  myRadio myoptions Generator - generator.js
  *  Reads JSON config files and builds a dynamic hardware configuration page.
  *  State is serialized via LZ-string into the URL hash for shareable links.
  * 
@@ -2415,8 +2415,8 @@ function generatePlatformioIni() {
 
   // Get firmware name for the env
   var firmwareNameCtrl = document.querySelector('[data-define="FIRMWARE_NAME"]');
-  var firmwareName = firmwareNameCtrl ? firmwareNameCtrl.value : 'my_ehradio';
-  var envName = firmwareName.toLowerCase().replace(/[^a-z0-9_]/g, '_').replace(/^_+|_+$/g, '') || 'my_ehradio';
+  var firmwareName = firmwareNameCtrl ? firmwareNameCtrl.value : 'my_radio';
+  var envName = firmwareName.toLowerCase().replace(/[^a-z0-9_]/g, '_').replace(/^_+|_+$/g, '') || 'my_radio';
 
   // Compute shareable URL to embed in the platformio.ini header comment
   var pioState = serializeState();
@@ -2448,7 +2448,7 @@ function buildBoardSection_pio(bd) {
   out += '; Board: ' + bd.name + '\n';
   out += '; -----------------------------------------------------------------------\n';
   out += '[' + bd.env + ']\n';
-  out += 'extends = ehradio\n';
+  out += 'extends = myradio\n';
   out += 'board = ' + bd.board + '\n';
 
   // board_build.*, board_upload.*, and any other generic platformio.ini fields
@@ -2461,7 +2461,7 @@ function buildBoardSection_pio(bd) {
   // build_flags
   if (bd.build_flags) {
     out += 'build_flags =\n';
-    out += '  ${ehradio.build_flags}\n';
+    out += '  ${myradio.build_flags}\n';
     out += '  ' + bd.build_flags + '\n';
   }
 
@@ -2552,7 +2552,7 @@ function buildEnvSection_pio(bd, envName, firmwareName) {
 
   // lib_deps
   out += 'lib_deps =\n';
-  out += '  ${ehradio.lib_deps}\n';
+  out += '  ${myradio.lib_deps}\n';
   if (libDepsStr) {
     libDepsStr.split('\n').forEach(function(l) {
       if (l.trim()) out += '  ' + l.trim() + '\n';
@@ -2561,7 +2561,7 @@ function buildEnvSection_pio(bd, envName, firmwareName) {
 
   // build_src_filter
   out += 'build_src_filter =\n';
-  out += '  ${ehradio.build_src_filter}\n';
+  out += '  ${myradio.build_src_filter}\n';
   if (buildFilterStr) {
     buildFilterStr.split('\n').forEach(function(l) {
       if (l.trim()) out += '  ' + l.trim() + '\n';

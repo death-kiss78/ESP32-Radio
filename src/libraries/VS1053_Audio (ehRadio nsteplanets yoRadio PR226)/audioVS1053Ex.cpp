@@ -6,8 +6,6 @@
  *  Created on: Jul 09.2017
  *  Updated on: Oct 22.2023
  *      Author: Wolle
- *  From yoRadio PR226 by nsteplanets Nov 28, 205
- *  To ehRadio 2026.06.29 with minimal changes
  * 
  */
 #ifndef VS_PATCH_ENABLE

@@ -219,16 +219,16 @@ void Startup::checkLittleFSandVer() {
 
       // Phase 2: write + read-back test (deeper — catches write/read failures)
       bool writeOk = false;
-      File test = LittleFS.open("/.ehradio_test", "w");
+      File test = LittleFS.open("/.myradio_test", "w");
       if (test) {
         test.print('!');
         test.close();
-        File rt = LittleFS.open("/.ehradio_test", "r");
+        File rt = LittleFS.open("/.myradio_test", "r");
         if (rt) {
           writeOk = (rt.read() == '!');
           rt.close();
         }
-        LittleFS.remove("/.ehradio_test");
+        LittleFS.remove("/.myradio_test");
       }
       if (writeOk) {
         healthy = true;
@@ -265,7 +265,7 @@ void Startup::checkLittleFSandVer() {
     BOOTLOG("New install detected.");
     config.wwwFilesExist = utility.verifyLittleFS();
     // New install — prevent false Safe Mode on first boot
-    { Preferences prefs; prefs.begin("ehradio", false);
+    { Preferences prefs; prefs.begin("myradio", false);
     prefs.putBool("bootstablemark", true);
     prefs.end(); }
   } else {

@@ -62,7 +62,7 @@ EXAMPLES:
     py conf_tool.py --check displayTFT428x142conf.h --strict
     py conf_tool.py --import krzxsiek-displayNV3007_142conf.h --name "krzxsiek"
     py conf_tool.py --import krzxsiek-displayNV3007_142conf.h --name "krzxsiek" --dry-run
-    py conf_tool.py --fromjson ehRadioLayout-Big_VU_OLED128x64.json --dry-run
+    py conf_tool.py --fromjson myRadioLayout-Big_VU_OLED128x64.json --dry-run
     py conf_tool.py --fromjson layout.json --name "My Layout 2"          # a copy, not an update
 
 WHAT --clean DOES (per file, nothing is written until the final prompt):
@@ -1346,9 +1346,9 @@ def _fill_height(value):
 
 
 def normalise_meta_pair(data, oled):
-    """OLED targets only: sort the meta fill pair the way ehRadio draws it.
+    """OLED targets only: sort the meta fill pair the way myRadio draws it.
 
-    ehRadio selects metaBGConfInv when invert title is on, and OLEDs default to inverted, so on an OLED
+    myRadio selects metaBGConfInv when invert title is on, and OLEDs default to inverted, so on an OLED
     the bar lives in metaBGConfInv and the hairline in metaBGConf.  A yoRadio conf is the other way
     round - and identically so for an OLED and for a TFT, which is why the family cannot be read out of
     a source file and has to be passed in.  So the pair is sorted by height: the hairline (height
@@ -1377,7 +1377,7 @@ def normalise_meta_pair(data, oled):
             if (hb <= META_HAIRLINE_MAX) == (hi <= META_HAIRLINE_MAX):
                 continue        # both rules or both bands: nothing to sort
             if hb <= META_HAIRLINE_MAX:
-                continue        # already the ehRadio way round
+                continue        # already the myRadio way round
             cfgs[bg[0]], cfgs[inv[0]] = ('metaBGConf', inv[1]), ('metaBGConfInv', bg[1])
             data['meta_swapped'] = True
             print("  meta pair sorted: hairline to metaBGConf, bar to metaBGConfInv")
@@ -1433,7 +1433,7 @@ def create_target_file(out_path, data, name, master):
             if band is None:
                 boot.append(f'        .{field:19s} = {{ }},   // no band: the layout has no metaBGConf')
             else:
-                note = ('// was metaBGConfInv (ehRadio flips yoRadio\'s metaBGConf to metaBGConfInv)'
+                note = ('// was metaBGConfInv (myRadio flips yoRadio\'s metaBGConf to metaBGConfInv)'
                         if data.get('meta_swapped') else '// from metaBGConf')
                 boot.append(f'        .{field:19s} = {normalise_value(band)},   {note}')
             continue

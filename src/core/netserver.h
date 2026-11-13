@@ -43,7 +43,7 @@ enum import_e      : uint8_t  { IMDONE=0, IMWIFI=2 };
 const char emptyfs_html[] PROGMEM = R"(
 <!DOCTYPE html><html><head><meta name="viewport" content="width=device-width, initial-scale=1, minimum-scale=0.25"><meta charset="UTF-8">
 <link rel="icon" type="image/png" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAAACXBIWXMAABJ0AAASdAHeZh94AAAAlElEQVRYw+2XSw6AIAxEG9fe/0zeSuOCBI2FVqafKCTdFeYFBmiJBse2LjtFjn8DnOIlwgHcIe7iLgC1SA/ABKgW4gBMd+RJlAuTq2QKIJmIBLjkaRYYFWdzW6ZCAHTzpItqAMSgmrNFxmuDTQC4+ARI4QFvCMh7Dxf3gDD5+9NvecobEAqT34DN8klQS7r1Cp9oTA8ah+h47LQOmQAAAABJRU5ErkJggg==">
-<title>ehRadio - WEB Board Uploader</title><style>html, body{margin: 0; padding: 0; height: 100%; background-color:#000; color:#eecccc; font-size:20px; display:flex; flex-direction:column;}
+<title>myRadio - WEB Board Uploader</title><style>html, body{margin: 0; padding: 0; height: 100%; background-color:#000; color:#eecccc; font-size:20px; display:flex; flex-direction:column;}
 hr{margin:20px 0;border:0; border-top:#555 1px solid;} p{text-align:center; margin-bottom:10px;} section{max-width:500px; text-align:center; margin:0 auto 30px auto; padding:20px; flex:1;}
 .hidden{display:none;} a{color: #ccccee; font-size:14px; text-decoration: none; font-weight: bold;} a:hover{text-decoration: underline}
 #copy{text-align: center; padding: 14px; font-size: 14px;}
@@ -62,7 +62,7 @@ select{background:#272727; color:#eecccc; padding:4px 8px; font-size:16px; borde
 </div>
 <hr />
 <div id="uploader">
-<h2>ehRadio - <span data-i18n="z_webui_uploader">WebUI Files Uploader</span></h2>
+<h2>myRadio - <span data-i18n="z_webui_uploader">WebUI Files Uploader</span></h2>
 <hr />
 <span data-i18n="z_select_www_files">Select ALL files from data/www/ and upload them using the form below</span>
 <form action="/webboard" method="post" enctype="multipart/form-data">
@@ -78,7 +78,7 @@ select{background:#272727; color:#eecccc; padding:4px 8px; font-size:16px; borde
 <span data-i18n="z_set_wifi">Setup Wi-Fi connection first!</span>
 </div>
 <div id="credtitle" class="hidden">
-<h2>ehRadio - <span data-i18n="z_credentials">Credentials</span></h2>
+<h2>myRadio - <span data-i18n="z_credentials">Credentials</span></h2>
 <hr />
 </div>
 <form name="wifiform" method="post" enctype="multipart/form-data">
@@ -89,7 +89,7 @@ select{background:#272727; color:#eecccc; padding:4px 8px; font-size:16px; borde
 </form>
 </div>
 <div id="downloader" class="hidden">
-<h2>ehRadio - <span data-i18n="z_webui_downloader">WebUI Files Downloader</span></h2>
+<h2>myRadio - <span data-i18n="z_webui_downloader">WebUI Files Downloader</span></h2>
 <hr />
 <span data-i18n="z_downloading">The WebUI files are currently downloading. Please wait a few moments. The device will restart and this page will reload when everything is ready.</span>
 </div>

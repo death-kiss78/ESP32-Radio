@@ -205,7 +205,7 @@ bool SDManager::_checkNoMedia(const char* path) {
   return nm;
 }
 
-// THE ONE LIST OF WHAT ehRadio PLAYS. The index's staleness check counts exactly these files (the footer count in
+// THE ONE LIST OF WHAT myRadio PLAYS. The index's staleness check counts exactly these files (the footer count in
 // indexSDPlaylist()) and filemanager.cpp asks the same question to decide whether a change can invalidate that index, so
 // a second copy could drift from the counter's and hide a newly added track until the next re-index.
 bool SDManager::isAudioName(const char* fn) {

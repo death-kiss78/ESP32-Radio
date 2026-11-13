@@ -16,7 +16,7 @@ One run does two things, in order:
      those, so listing them here would only add noise.
 
   2. SYNC, once you answer the prompt.
-       - [platformio], [ehradio] and [library] are replaced wholesale from the master
+       - [platformio], [myradio] and [library] are replaced wholesale from the master
        - board_build.filesystem is copied per board section, key by key. This one matters
          because the firmware mounts LittleFS: a contributor ini that asks for spiffs
          produces an image that can never mount, and prepare_releases.py refuses to run.
@@ -33,8 +33,8 @@ from typing import Optional
 
 SCRIPT_DIR = Path(__file__).parent  # builds/
 PATCH_SENTINEL = "; patch_pio_ini_files can automatically patch this file"
-SYNC_SECTIONS = ("platformio", "ehradio", "library")
-DEFAULT_MASTER = "trip5"
+SYNC_SECTIONS = ("platformio", "myradio", "library")
+DEFAULT_MASTER = "death-kiss78"
 
 # Board-section keys copied individually rather than by replacing the whole section: a
 # board block also carries build_flags, and those legitimately differ between contributors.
@@ -139,12 +139,12 @@ def _section_name(line):
 
 def parse_library_lines(ini_path, folder):
     """
-    Collect every library line from [ehradio] lib_deps and from [library].
+    Collect every library line from [myradio] lib_deps and from [library].
 
     Comment-only lines, blank lines and ${...} interpolation lines are skipped; the last
     are deliberate aliases (st7789 = ${library.st7735}), not libraries of their own.
 
-    Returns (lines, ok) where ok is False when the file has no [ehradio] section at all,
+    Returns (lines, ok) where ok is False when the file has no [myradio] section at all,
     which is what "cannot be parsed" means for this tool.
     """
     try:
@@ -152,9 +152,9 @@ def parse_library_lines(ini_path, folder):
     except OSError:
         return [], False
 
-    found_ehradio = False
+    found_myradio = False
     lines = []
-    section = None          # "ehradio" | "library" | None
+    section = None          # "myradio" | "library" | None
     in_lib_deps = False
 
     for index, raw_line in enumerate(raw_lines):
@@ -162,9 +162,9 @@ def parse_library_lines(ini_path, folder):
 
         header = _section_name(stripped)
         if header is not None:
-            if header == "ehradio":
-                found_ehradio = True
-            section = header if header in ("ehradio", "library") else None
+            if header == "myradio":
+                found_myradio = True
+            section = header if header in ("myradio", "library") else None
             in_lib_deps = False
             continue
 
@@ -178,7 +178,7 @@ def parse_library_lines(ini_path, folder):
         value = None
         alias_key = None
 
-        if section == "ehradio":
+        if section == "myradio":
             if re.match(r'^lib_deps\s*=', stripped):
                 in_lib_deps = True
                 same_line = re.sub(r'^lib_deps\s*=\s*', '', stripped).strip()
@@ -223,7 +223,7 @@ def parse_library_lines(ini_path, folder):
             line_no=index + 1,
         ))
 
-    return lines, found_ehradio
+    return lines, found_myradio
 
 
 def inventory_for(ini_path, folder):

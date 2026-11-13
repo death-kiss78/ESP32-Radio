@@ -46,10 +46,10 @@ CONF_MAX_VOLUME = 'max_volume'
 CONF_ROOT_TOPIC = 'root_topic'
 CONF_FALLBACK_IMAGE = 'fallback_image'
 CONF_DEVICE_URL = 'device_url'
-DEFAULT_FALLBACK_IMAGE = 'https://trip5.github.io/ehRadio/images/logo-color-square.png'
+DEFAULT_FALLBACK_IMAGE = 'https://death-kiss78.github.io/myRadio/images/logo-color-square.png'
 
 MEDIA_PLAYER_PLATFORM_SCHEMA = MEDIA_PLAYER_PLATFORM_SCHEMA.extend({
-  vol.Required(CONF_ROOT_TOPIC, default="ehradio"): cv.string,
+  vol.Required(CONF_ROOT_TOPIC, default="myradio"): cv.string,
   vol.Optional(CONF_NAME, default=DEFAULT_NAME): cv.string,
   vol.Optional(CONF_MAX_VOLUME, default='42'): cv.string,
   vol.Optional(CONF_FALLBACK_IMAGE, default=DEFAULT_FALLBACK_IMAGE): cv.string,
@@ -78,10 +78,10 @@ def setup_platform(hass, config, add_devices, discovery_info=None):
   fallback_image = config.get(CONF_FALLBACK_IMAGE, DEFAULT_FALLBACK_IMAGE)
   device_url = config.get(CONF_DEVICE_URL, '')
   playlist = []
-  api = ehradioApi(root_topic, hass, playlist, device_url)
-  add_devices([ehradioDevice(name, max_volume, fallback_image, device_url, api)], True)
+  api = myradioApi(root_topic, hass, playlist, device_url)
+  add_devices([myradioDevice(name, max_volume, fallback_image, device_url, api)], True)
 
-class ehradioApi():
+class myradioApi():
   def __init__(self, root_topic, hass, playlist, device_url):
     self.hass = hass
     self.mqtt = mqtt
@@ -155,7 +155,7 @@ class ehradioApi():
         self.playlist.append(station)
         counter=counter+1
 
-class ehradioDevice(MediaPlayerEntity):
+class myradioDevice(MediaPlayerEntity):
   def __init__(self, name, max_volume, fallback_image, device_url, api):
     self._name = name
     self.api = api
@@ -176,9 +176,9 @@ class ehradioDevice(MediaPlayerEntity):
   def device_info(self) -> DeviceInfo:
     device_url = self.api.base_url() or self._device_url
     return DeviceInfo(
-        identifiers={("ehradio", self._name)},
+        identifiers={("myradio", self._name)},
         name=self._name,
-        manufacturer="ehRadio",
+        manufacturer="myRadio",
         model="ESP32 Internet Radio",
         configuration_url=device_url if device_url else None,
     )
@@ -299,7 +299,7 @@ class ehradioDevice(MediaPlayerEntity):
 
   @property
   def unique_id(self):
-    return f"ehradio_{self._name}"
+    return f"myradio_{self._name}"
 
   @property
   def extra_state_attributes(self):

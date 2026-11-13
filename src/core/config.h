@@ -18,7 +18,7 @@ extern uint32_t vuPsramBytes;
 
 #define PLAYLIST_FILE        "playlist.csv"
 #define SSIDS_FILE           "wifi.csv"
-#define VERSION_FILE         "ehradio.ver"
+#define VERSION_FILE         "myradio.ver"
 #define TMP_FILE             "tmpfile.txt"
 #define INDEX_FILE           "index.dat"
 #define PLAYLIST_SD_FILE     "playlistsd.csv"
@@ -31,7 +31,7 @@ extern uint32_t vuPsramBytes;
 #define INDEX_PATH           "/data/" INDEX_FILE
 
 
-#define SD_DATA_DIR          "/ehradio.data"
+#define SD_DATA_DIR          "/myradio.data"
 #define PLAYLIST_SD_PATH     SD_DATA_DIR "/" PLAYLIST_SD_FILE
 #define INDEX_SD_PATH        SD_DATA_DIR "/" INDEX_SD_FILE
 #define PLAYLIST_SD_TMP_PATH SD_DATA_DIR "/" PLAYLIST_SD_FILE ".tmp"
@@ -59,7 +59,7 @@ static constexpr size_t STATION_FIELD_LENGTH = 170; // Max length for station na
 static constexpr size_t WEATHER_STRING_L = 512; // Weather string buffer
 static constexpr uint32_t NVS_SLOW_WRITE_MS = 50; // ms a single NVS commit may take before FUNCTIONLOG names the key
 
-#define ESPFILEUPDATER_USERAGENT "ehradio/" RADIOVERSION "(" GITHUBURL ")"  // used as a user-agent string for downloading with ESPFileUpdater
+#define ESPFILEUPDATER_USERAGENT "myradio/" RADIOVERSION "(" GITHUBURL ")"  // used as a user-agent string for downloading with ESPFileUpdater
 
 #if ESP_ARDUINO_VERSION >= ESP_ARDUINO_VERSION_VAL(3, 0, 0)
   #define ESP_ARDUINO_3 1
@@ -237,7 +237,7 @@ struct configKeyMap {
 
 #if IR_PIN!=255
   /* IR code store: one named field per remote button, 3 codes each.
-     Persisted in its own NVS namespace ("ehradioir") using the irKeyMap table in config.cpp.
+     Persisted in its own NVS namespace ("myradioir") using the irKeyMap table in config.cpp.
      Buttons are identified by name (see data-irid in irrecord.html) - never by array index. */
   struct irstore_t
   {
@@ -398,7 +398,7 @@ class Config {
     }
     bool saveRawValue(const configKeyMap* entry, const void* value, size_t size) {
       const uint32_t _t0 = millis();
-      prefs.begin("ehradio", false);
+      prefs.begin("myradio", false);
       size_t existingLen = prefs.getBytesLength(entry->key);
       bool keyExists = (existingLen == size);
       bool needSave;

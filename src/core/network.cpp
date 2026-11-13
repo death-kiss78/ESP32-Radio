@@ -833,7 +833,7 @@ void MyNetwork::ehDPinit() {
       ehdp.setFirmware(fw.c_str());
     #endif
   }
-  ehdp.setProject("ehRadio");
+  ehdp.setProject("myRadio");
   ehdp.setVersion(RADIOVERSION);
   ehdp.setUIPort(80);
   ehdp.setMaterialSymbol("0xe03e");
@@ -899,7 +899,7 @@ void MyNetwork::begin() {
     #endif
     char deviceUrl[64];
     strlcpy(deviceUrl, "http://{LOCAL_IPV4}/", sizeof(deviceUrl));
-    improv->setDeviceInfo(chip, "ehRadio", RADIOVERSION, "ehRadio", deviceUrl);
+    improv->setDeviceInfo(chip, "myRadio", RADIOVERSION, "myRadio", deviceUrl);
     improv->setCustomConnectWiFi(onImprovCustomConnect);
   }
   BOOTLOG("network.begin");
@@ -977,7 +977,7 @@ static bool onImprovCustomConnect(const char* ssid, const char* password) {
     #else
       ImprovTypes::ChipFamily chip = ImprovTypes::ChipFamily::CF_ESP32;
     #endif
-    if (network.improv) network.improv->setDeviceInfo(chip, "ehRadio", RADIOVERSION, "ehRadio", deviceUrl);
+    if (network.improv) network.improv->setDeviceInfo(chip, "myRadio", RADIOVERSION, "myRadio", deviceUrl);
 
     improvRebootTicker.once(3, triggerImprovReboot);
     return true;

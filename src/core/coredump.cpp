@@ -247,7 +247,7 @@ bool buildAllText(String& out) {
   } else {
     snprintf(when, sizeof(when), "clock unverified");
   }
-  out += "ehRadio " RADIOVERSION " | ";
+  out += "myRadio " RADIOVERSION " | ";
   out += kFirmware;
   out += " | app md5 ";
   out += ESP.getSketchMD5();

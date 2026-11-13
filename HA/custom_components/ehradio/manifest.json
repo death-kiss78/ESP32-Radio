@@ -1,9 +1,0 @@
-{
-    "domain": "ehradio",
-    "name": "ehRadio",
-    "documentation": "https://github.com/trip5/ehRadio",
-    "dependencies": ["http", "mqtt"],
-    "codeowners": ["@trip5"],
-    "requirements": [],
-    "version": "2026.09.22"
-  }

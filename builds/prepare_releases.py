@@ -448,7 +448,7 @@ def generate_esp_web_tools_manifests(firmwares, output_dir, version='', filesyst
     for board_env, chip_family, fw_env, friendly_name, _ in firmwares:
         bl_offset = 0 if chip_family == 'ESP32-S3' else 4096
         manifest = {
-            'name': f'ehRadio - {friendly_name}',
+            'name': f'myRadio - {friendly_name}',
             'version': version,
             'builds': [
                 {
@@ -485,7 +485,7 @@ def generate_firmware_info_json(firmwares, output_path, version=''):
             {
                 'name': f'{contributor} {friendly_name}',
                 'manifest': f'manifests/{fw_env}-manifest.json',
-                'description': f'ehRadio - {fw_env}',
+                'description': f'myRadio - {fw_env}',
             }
             for _, _, fw_env, friendly_name, contributor in firmwares
         ],
@@ -493,7 +493,7 @@ def generate_firmware_info_json(firmwares, output_path, version=''):
     )
 
     firmware_info = {
-        'project': 'ehRadio',
+        'project': 'myRadio',
         'version': version,
         'variants': variants,
     }
@@ -638,7 +638,7 @@ def build_all(folders, verbose):
         say('[X] Refusing to build: neither pio nor platformio is on PATH.')
         return 2
 
-    log_dir = Path(tempfile.mkdtemp(prefix='ehradio-buildall-'))
+    log_dir = Path(tempfile.mkdtemp(prefix='myradio-buildall-'))
     results = []
     environments = 0
     started_all = time.time()

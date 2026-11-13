@@ -55,7 +55,7 @@ ROOT IS THE ANCHOR:
 EXAMPLES:
     py theme_tool.py
     py theme_tool.py -i krzsieksik_theme_gray.h --name "Gray (Krzsiek)"
-    py theme_tool.py -i ehRadioThemes-Backup.json
+    py theme_tool.py -i myRadioThemes-Backup.json
     py theme_tool.py -f xtheme.json
     py theme_tool.py -f gray.json -n 3
     py theme_tool.py -q
@@ -609,7 +609,7 @@ SMART_FALLBACK = [
 # Resolved in dependency order so later entries can depend on earlier ones.  These produce a VALUE only:
 # the emitted entry carries no annotation, so a fallback worth eyeballing is found by reading the theme.
 COMPUTED_FALLBACK = [
-    # The two palette entries ehRadio added after the old theme format was defined.  Both come from
+    # The two palette entries myRadio added after the old theme format was defined.  Both come from
     # the divider, which every theme file sets.  line is the divider's own ink, used by the vertical
     # and horizontal line widgets; vuaxis is a quarter of it, which keeps the VU's reference lines
     # (centre cross, bar baseline, divider) visible in every theme, on black and on white alike.

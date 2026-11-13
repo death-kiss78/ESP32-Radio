@@ -270,7 +270,7 @@ void Telnet::disconnectClient(uint8_t clientId) {
 
 void Telnet::on_connect(const char* str, uint8_t clientId) {
   FUNCTIONLOG("Telnet", "[%d] %s connected", clientId, str);
-  print(clientId, "Welcome to ehRadio!\r\n(Use ^] + q  ( Ctrl+] + q ) to disconnect.)\r\n");
+  print(clientId, "Welcome to myRadio!\r\n(Use ^] + q  ( Ctrl+] + q ) to disconnect.)\r\n");
   showPromptNow(clientId);
 }
 

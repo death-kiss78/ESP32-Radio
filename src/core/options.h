@@ -2,7 +2,7 @@
 #define options_h
 #pragma once
 
-#define RADIOVERSION "2026.11.13"
+#define RADIOVERSION "2026.11.11"
 
 /*******************************************************
  
@@ -15,7 +15,7 @@ used in myoptions.h when compiling.
 
 myoptions.h should exist in the root folder.
 You can use the myoptions.h and platformio.ini generator:
-https://trip5.github.io/ehRadio/myoptions/generator.html
+https://death-kiss78.github.io/myRadio/myoptions/generator.html
 or examine the examples in builds/trip5 and make your own!
 
 ********************************************************/
@@ -593,7 +593,7 @@ or examine the examples in builds/trip5 and make your own!
   #define BTN_DOWN_PULLUP BTN_INTERNALPULLUP
   #define BTN_MODE_PULLUP BTN_INTERNALPULLUP
 #endif
-/* ehRadio Buttons */
+/* myRadio Buttons */
 #ifndef BTN_DOWN
   #define BTN_DOWN 255
 #endif
@@ -1122,7 +1122,7 @@ or examine the examples in builds/trip5 and make your own!
   //#define OTA_PASS "myotapassword12345"
 #endif
 #ifndef AP_SSID // name of hotspot in AP Mode
-  #define AP_SSID "ehRadio"
+  #define AP_SSID "myRadio"
 #endif
 #ifdef AP_PASSWORD
   #if (AP_PASSWORD)[0] == '\0' // if it's empty, undefine
@@ -1660,7 +1660,7 @@ static_assert(
   #define MQTT_PASS ""
 #endif
 #ifndef MQTT_TOPIC
-  #define MQTT_TOPIC "ehradio/myradio/"
+  #define MQTT_TOPIC "myradio/myradio/"
 #endif
 
 #endif // options_h

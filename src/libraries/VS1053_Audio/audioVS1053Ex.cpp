@@ -6,9 +6,6 @@
  *  Created on: Jul 09.2017
  *  Updated on: Oct 22.2023
  *      Author: Wolle
- *  From yoRadio PR226 by nsteplanets Nov 28, 2025
- *  To ehRadio 2026.06.29 with minimal changes
- *  2026.09.13 Changes to VU Meter
  * 
  */
 #ifndef VS_PATCH_ENABLE
@@ -3395,7 +3392,7 @@ bool Audio::connecttohost(const char* host, const char* user, const char* pwd) {
         if(audio_icyurl) audio_icyurl("");
         /* m_lastHost is deliberately KEPT here.  streamDetection() retries it every 5 s while no data arrives,
            so erasing it turned every later library-level retry into connecttohost("") - a guaranteed failure
-           for the rest of the session, which left ehRadio's ladder as the only way back.  The I2S backend keeps
+           for the rest of the session, which left myRadio's ladder as the only way back.  The I2S backend keeps
            the host in the same situation (see the "Request %s failed!" branch in I2S_Audio/Audio.cpp). */
     }
     if(hostwoext) {free(hostwoext); hostwoext = NULL;}

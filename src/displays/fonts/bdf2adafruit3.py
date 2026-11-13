@@ -21,7 +21,7 @@ Options:
 Copyright (c) 2026 Trip5
 
 This is not the same as the tool in the Matrix Fonts repo.
-This one is specifically for ehRadio.
+This one is specifically for myRadio.
 
 SPDX-License-Identifier: GPL-3.0-only
 """

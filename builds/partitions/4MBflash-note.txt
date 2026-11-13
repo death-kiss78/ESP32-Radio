@@ -1,4 +1,4 @@
-There is no way that ehRadio will build and still fit into a default 1.31 MB space allowed
+There is no way that myRadio will build and still fit into a default 1.31 MB space allowed
 in the default 4MB partition scheme.
 
 So this file gives app0 the same amount of space as in the 8MB default partition file, 3.19MB.
@@ -12,7 +12,7 @@ What uses LittleFS?
   - wifi.csv (1KB) and playlist.csv (75 stations about 6KB, 1000 stations about 125KB)
   - These estimates current as of 09.20.2026
 
-If you really must tinker, try building with ehradio_4MB.csv first with
+If you really must tinker, try building with radio_4MB.csv first with
 #define CORE_MONITOR in your myoptions.h file.  This will show LittleFS space used and free.
 
 Because there is no app1 partition, OTA is simply not possible using the 4MB partition.

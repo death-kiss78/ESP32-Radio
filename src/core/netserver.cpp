@@ -2095,9 +2095,9 @@ void handleNotFound(AsyncWebServerRequest * request) {
       // quoted-string-free UTF-8 form for everything that does.  The filename* value must NOT be quoted -
       // a closing quote there is not a delimiter, it is part of the value, and browsers turn the illegal
       // character into an underscore when they pre-fill the save dialog (which is where ".json_" came from).
-      disposition = "attachment; filename=\"ehRadioTheme-";
+      disposition = "attachment; filename=\"myRadioTheme-";
       disposition += stem;
-      disposition += ".json\"; filename*=UTF-8''ehRadioTheme-";
+      disposition += ".json\"; filename*=UTF-8''myRadioTheme-";
       for (size_t i = 0; i < stem.length(); i++) {
         const uint8_t b = (uint8_t)stem[i];
         const bool plain = (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9') ||
@@ -2125,7 +2125,7 @@ void handleNotFound(AsyncWebServerRequest * request) {
     String json;
     themeJsonForAllSlots(json);
     AsyncWebServerResponse *response = request->beginResponse(200, "application/json", json);
-    response->addHeader("Content-Disposition", String("attachment; filename=\"ehRadioThemes-Backup") + dspSuffix() + ".json\"");
+    response->addHeader("Content-Disposition", String("attachment; filename=\"myRadioThemes-Backup") + dspSuffix() + ".json\"");
     response->addHeader("Cache-Control", "no-cache");
     request->send(response);
     return;
@@ -2375,7 +2375,7 @@ void handleNotFound(AsyncWebServerRequest * request) {
     String json;
     layoutDocFor(layoutSource(id), layoutName(id), json);
     AsyncWebServerResponse *response = request->beginResponse(200, "application/json", json);
-    response->addHeader("Content-Disposition", attachmentName("ehRadioLayout-", layoutName(id), layoutSlotFileName((uint8_t)slot)));
+    response->addHeader("Content-Disposition", attachmentName("myRadioLayout-", layoutName(id), layoutSlotFileName((uint8_t)slot)));
     response->addHeader("Cache-Control", "no-cache");
     request->send(response);
     return;
@@ -2386,7 +2386,7 @@ void handleNotFound(AsyncWebServerRequest * request) {
     String json;
     layoutDocForAllSlots(json);
     AsyncWebServerResponse *response = request->beginResponse(200, "application/json", json);
-    response->addHeader("Content-Disposition", String("attachment; filename=\"ehRadioLayouts-Backup") + dspSuffix() + ".json\"");
+    response->addHeader("Content-Disposition", String("attachment; filename=\"myRadioLayouts-Backup") + dspSuffix() + ".json\"");
     response->addHeader("Cache-Control", "no-cache");
     request->send(response);
     return;

@@ -8,7 +8,7 @@
   <link rel="icon" type="image/png" href="icon.png">
   <link rel="stylesheet" id="styleCSS" href="style.css" type="text/css">
   <script src="variables.js"></script>
-  <title>ehRadio - SD File Manager</title>
+  <title>myRadio - SD File Manager</title>
 </head>
 <body class="sdman">
 
@@ -278,7 +278,7 @@
     // The data folder holds the derived playlist, the SD index and the credentials, and the device refuses every
     // change inside it, so the controls are dimmed here while browsing in stays allowed. The name must match
     // SD_DATA_DIR; /data is NOT locked (the old name), and the user may delete it. UX only - the DEVICE is the guard.
-    var locked = (state.path === '/ehradio.data' || state.path.indexOf('/ehradio.data/') === 0);
+    var locked = (state.path === '/myradio.data' || state.path.indexOf('/myradio.data/') === 0);
     state.locked = locked;
     // Uploads are dimmed only where the folder itself is protected; New Folder and Delete keep working.
     var noUpload = locked;

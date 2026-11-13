@@ -6,7 +6,6 @@
  *  Version 3.1.0n
  *  Updated on: Feb 27.2025, Apr 04.2025 (Maleksm)
  *      Author: Wolle (schreibfaul1)
- *  Some adjustments by Trip5 for ehRadio
  */
 #if defined(USE_AUDIO_I2S) || defined(USE_AUDIO_ESP32_DAC)
 

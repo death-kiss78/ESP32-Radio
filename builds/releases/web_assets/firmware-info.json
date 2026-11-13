@@ -1,16 +1,16 @@
 {
-  "project": "ehRadio",
+  "project": "myRadio",
   "version": "2026.11.13",
   "variants": [
     {
       "name": "Death-Kiss78 es3c28s",
       "manifest": "manifests/death-kiss78_es3c28s-manifest.json",
-      "description": "ehRadio - death-kiss78_es3c28s"
+      "description": "myRadio - death-kiss78_es3c28s"
     },
     {
       "name": "No Display No Display",
       "manifest": "manifests/no_display_test-manifest.json",
-      "description": "ehRadio - no_display_test"
+      "description": "myRadio - no_display_test"
     }
   ]
 }

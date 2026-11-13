@@ -1,0 +1,9 @@
+{
+    "domain": "myradio",
+    "name": "myRadio",
+    "documentation": "https://github.com/death-kiss78/myRadio",
+    "dependencies": ["http", "mqtt"],
+    "codeowners": ["@death-kiss78"],
+    "requirements": [],
+    "version": "2026.11.13"
+  }

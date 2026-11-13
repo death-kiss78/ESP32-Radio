@@ -134,7 +134,7 @@ jobs:
             if [ -f "$page" ]; then
               sed -i "s|const GITHUB_OWNER = '.*'|const GITHUB_OWNER = '${{ github.repository_owner }}'|g" "$page"
               sed -i "s|const REPO_NAME = '.*'|const REPO_NAME = '${{ github.event.repository.name }}'|g" "$page"
-              sed -i "s|github.com/trip5/ehRadio/releases|github.com/${{ github.repository }}/releases|g" "$page"
+              sed -i "s|github.com/death-kiss78/myRadio/releases|github.com/${{ github.repository }}/releases|g" "$page"
               sed -i "s|<!-- <p>Forked by XYZ from</p> -->|<p>Forked by ${{ github.repository_owner }} from</p>|g" "$page"
               echo "✅ Customized $page for ${{ github.repository_owner }}"
             fi
