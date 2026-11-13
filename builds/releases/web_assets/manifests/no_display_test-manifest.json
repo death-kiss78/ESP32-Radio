@@ -1,6 +1,6 @@
 {
   "name": "myRadio - No Display",
-  "version": "2026.11.13",
+  "version": "2026.11.12",
   "builds": [
     {
       "chipFamily": "ESP32-S3",
