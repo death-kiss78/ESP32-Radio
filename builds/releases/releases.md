@@ -51,5 +51,5 @@ eh Device Scanner app can be used to connect to the WebUI easily - get the app [
 ### Death-Kiss78 Firmware
   - [`death-kiss78_es3c28s.bin`](https://death-kiss78.github.io/myRadio/boards.html?board=es3c28s)
 ### Add Yours
-  - you can either fork my `ehradio` repo and edit these files or request a build be added
+  - you can either fork my `myRadio` repo and edit these files or request a build be added
     - use [the generator](https://death-kiss78.github.io/myRadio/myoptions/generator.html) and copy the link and include it in your request

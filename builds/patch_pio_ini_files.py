@@ -34,7 +34,7 @@ from typing import Optional
 SCRIPT_DIR = Path(__file__).parent  # builds/
 PATCH_SENTINEL = "; patch_pio_ini_files can automatically patch this file"
 SYNC_SECTIONS = ("platformio", "myradio", "library")
-DEFAULT_MASTER = "death-kiss78"
+DEFAULT_MASTER = "generator"
 
 # Board-section keys copied individually rather than by replacing the whole section: a
 # board block also carries build_flags, and those legitimately differ between contributors.
