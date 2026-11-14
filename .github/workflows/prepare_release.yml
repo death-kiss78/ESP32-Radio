@@ -49,11 +49,11 @@ jobs:
 
           patch += 1
 
-          if patch > 999:
+          if patch > 99:
               patch = 0
               minor += 1
 
-          if minor > 999:
+          if minor > 99:
               minor = 0
               major += 1
 
