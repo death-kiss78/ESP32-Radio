@@ -36,9 +36,9 @@
       "files": ["ErrorHandling.ino"]
     },
     {
-      "name": "myRadio",
-      "base": "examples/myRadio",
-      "files": ["myRadio.cpp"]
+      "name": "ehRadio",
+      "base": "examples/ehRadio",
+      "files": ["ehRadio.cpp"]
     }
   ]
 }
