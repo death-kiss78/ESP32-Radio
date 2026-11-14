@@ -1,6 +1,6 @@
 {
   "name": "myRadio - es3c28s",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "builds": [
     {
       "chipFamily": "ESP32-S3",
