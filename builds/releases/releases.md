@@ -1,6 +1,6 @@
 ## Pre-built Firmwares & WebUI Assets
 
-You do not need to download any of these files if you use use the [ehRadio Flasher](https://trip5.github.io/ehRadio/flasher.html).
+You do not need to download any of these files if you use use the [myRadio Flasher](https://death-kiss78.github.io/myRadio/flasher.html).
 
 But you can click the binary name to see how that firmware is configured... skip down to [Boards](#boards).
 
@@ -34,7 +34,7 @@ eh Device Scanner app can be used to connect to the WebUI easily - get the app [
   - this is an easy-to-download file that contains all of the LittleFS files
   - you can use this to upload necessary WebUI files instead of allowing automatic download
     - extract all files
-    - connect to the `ehRadio` AP and upload all of the files in the `data` folder
+    - connect to the `myRadio` AP and upload all of the files in the `data` folder
     - you may also edit `wifi.csv` and the `playlist.csv` files and upload those as well
 
 ### Web Assets
@@ -52,4 +52,4 @@ eh Device Scanner app can be used to connect to the WebUI easily - get the app [
   - [`death-kiss78_es3c28s.bin`](https://death-kiss78.github.io/myRadio/boards.html?board=es3c28s)
 ### Add Yours
   - you can either fork my `ehradio` repo and edit these files or request a build be added
-    - use [the generator](https://trip5.github.io/ehRadio/myoptions/generator.html) and copy the link and include it in your request
+    - use [the generator](https://death-kiss78.github.io/myRadio/myoptions/generator.html) and copy the link and include it in your request
